@@ -179,7 +179,7 @@
   </footer>
 
   <script>
-    const PROXIES = [
+    const PROXY_FNS = [
       (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
       (u) => 'https://corsproxy.io/?' + encodeURIComponent(u),
     ];
@@ -198,18 +198,30 @@
       bar.style.width = Math.min(100, pct) + '%';
     }
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     async function fetchPage(url) {
-      let lastErr;
-      for (const proxy of PROXIES) {
-        try {
-          const res = await fetch(proxy(url));
-          if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue; }
-          return await res.text();
-        } catch (err) {
-          lastErr = err;
+      const MAX_RETRIES = 4;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        for (const proxy of PROXY_FNS) {
+          try {
+            const res = await fetch(proxy(url));
+            if (res.status === 429) {
+              // Rate limited — back off exponentially
+              const wait = Math.min(1000 * Math.pow(2, attempt), 8000);
+              await sleep(wait);
+              break; // retry from outer loop
+            }
+            if (!res.ok) continue; // try next proxy
+            return await res.text();
+          } catch (err) {
+            continue; // try next proxy
+          }
         }
+        // If we exhausted proxies on this attempt, wait before retrying
+        if (attempt < MAX_RETRIES) await sleep(500 * (attempt + 1));
       }
-      throw new Error(`All proxies failed for ${url}: ${lastErr?.message}`);
+      throw new Error(`Failed after ${MAX_RETRIES + 1} attempts: ${url}`);
     }
 
     function parseNovelDetail(html) {
@@ -381,35 +393,27 @@ ${toc.join('\n')}
       URL.revokeObjectURL(url);
     }
 
-    const CONCURRENCY = 6;
+    const CONCURRENCY = 4;
+    const FAIL_MARKER = '__FAILED__';
 
-    async function runPool(tasks, concurrency, onDone) {
-      const results = new Array(tasks.length);
+    async function runPool(items, concurrency, fn, onProgress) {
+      const results = new Array(items.length);
       let next = 0;
       let done = 0;
 
       async function worker() {
-        while (next < tasks.length) {
+        while (next < items.length) {
           const i = next++;
-          results[i] = await tasks[i]();
+          results[i] = await fn(items[i], i);
           done++;
-          if (onDone) onDone(done, tasks.length);
+          if (onProgress) onProgress(done, items.length);
         }
       }
 
-      const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker());
-      await Promise.all(workers);
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+      );
       return results;
-    }
-
-    async function fetchWithRetry(url, retries = 2) {
-      for (let i = 0; i <= retries; i++) {
-        try {
-          return await fetchPage(url);
-        } catch (err) {
-          if (i === retries) throw err;
-        }
-      }
     }
 
     async function generate() {
@@ -440,47 +444,76 @@ ${toc.join('\n')}
 
         if (novel.chapters.length === 0) throw new Error('No chapters found for this novel.');
 
-        let failed = 0;
+        const total = novel.chapters.length;
 
         showStatus(
           `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong> by ${escapeHtml(novel.author)}<br>` +
-          `Downloading ${novel.chapters.length} chapters (${CONCURRENCY} parallel)...`,
+          `Downloading ${total} chapters...`,
           'info'
         );
 
-        // Step 2: Download chapters in parallel batches
-        const tasks = novel.chapters.map((ch, i) => async () => {
+        // Step 2: First pass — download all chapters with concurrency
+        const chapters = await runPool(novel.chapters, CONCURRENCY, async (ch, i) => {
           try {
-            const chHtml = await fetchWithRetry(ch.url);
+            const chHtml = await fetchPage(ch.url);
             const parsed = parseChapterContent(chHtml);
             return { title: parsed.title || ch.title, content: parsed.content };
-          } catch (err) {
-            failed++;
-            return { title: ch.title || `Chapter ${i + 1}`, content: `<p>[Failed to fetch: ${escapeXml(err.message)}]</p>` };
+          } catch {
+            return { title: ch.title || `Chapter ${i + 1}`, content: FAIL_MARKER, url: ch.url };
           }
-        });
-
-        const chapters = await runPool(tasks, CONCURRENCY, (done, total) => {
+        }, (done) => {
           setProgress((done / total) * 100);
+          const failCount = chapters ? chapters.filter(c => c && c.content === FAIL_MARKER).length : 0;
           showStatus(
             `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
-            `Downloaded ${done} / ${total} chapters${failed ? ` (${failed} failed)` : ''}`,
+            `Downloaded ${done} / ${total} chapters` + (failCount ? ` (retrying ${failCount} later)` : ''),
             'info'
           );
         });
 
-        // Step 3: Build EPUB
+        // Step 3: Retry pass — re-fetch failed chapters one at a time with longer backoff
+        const failedIdxs = chapters.map((c, i) => c.content === FAIL_MARKER ? i : -1).filter(i => i >= 0);
+        if (failedIdxs.length > 0) {
+          showStatus(
+            `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
+            `Retrying ${failedIdxs.length} failed chapters...`,
+            'info'
+          );
+
+          for (let r = 0; r < failedIdxs.length; r++) {
+            const i = failedIdxs[r];
+            const ch = novel.chapters[i];
+            // Wait a bit between retries to let rate limits reset
+            if (r > 0) await sleep(1500);
+            try {
+              const chHtml = await fetchPage(ch.url);
+              const parsed = parseChapterContent(chHtml);
+              chapters[i] = { title: parsed.title || ch.title, content: parsed.content };
+            } catch {
+              chapters[i] = { title: ch.title || `Chapter ${i + 1}`, content: '<p>[Chapter unavailable]</p>' };
+            }
+            showStatus(
+              `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
+              `Retrying failed chapters: ${r + 1} / ${failedIdxs.length}`,
+              'info'
+            );
+          }
+        }
+
+        const finalFailed = chapters.filter(c => c.content === '<p>[Chapter unavailable]</p>').length;
+
+        // Step 4: Build EPUB
         showStatus('<span class="spinner"></span> Building EPUB...', 'info');
         const blob = await buildEpub(novel, chapters);
 
-        // Step 4: Trigger download
+        // Step 5: Download
         const safeTitle = novel.title.replace(/[<>:"/\\|?*]/g, '').trim();
         downloadBlob(blob, `${safeTitle}.epub`);
 
         setProgress(-1);
         showStatus(
-          `<strong>${escapeHtml(novel.title)}</strong> — ${novel.chapters.length} chapters` +
-          (failed ? ` (${failed} failed)` : '') + `<br>EPUB downloaded!`,
+          `<strong>${escapeHtml(novel.title)}</strong> — ${total} chapters` +
+          (finalFailed ? ` (${finalFailed} unavailable)` : '') + `<br>EPUB downloaded!`,
           'success'
         );
 

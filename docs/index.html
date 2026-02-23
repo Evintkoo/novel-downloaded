@@ -282,11 +282,11 @@
   </rootfiles>
 </container>`);
 
-      // style.css
+      // style.css — each chapter file is its own page, no mid-chapter breaks
       zip.file('OEBPS/style.css',
-`body { font-family: Georgia, serif; line-height: 1.6; margin: 1em; }
-h1 { font-size: 1.4em; text-align: center; margin: 2em 0 1em; page-break-before: always; }
-p { text-indent: 1.5em; margin: 0.4em 0; }`);
+`body { font-family: Georgia, serif; line-height: 1.8; margin: 1em; padding: 0; }
+h1 { font-size: 1.4em; text-align: center; margin: 0 0 1.5em; padding-top: 2em; }
+p { text-indent: 1.5em; margin: 0.5em 0; orphans: 3; widows: 3; }`);
 
       // chapter xhtml files
       const manifest = [];
@@ -304,7 +304,7 @@ p { text-indent: 1.5em; margin: 0.4em 0; }`);
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>${chTitle}</title><link rel="stylesheet" href="style.css"/></head>
-<body>
+<body style="page-break-before:always; page-break-after:always;">
 <h1>${chTitle}</h1>
 ${ch.content || '<p>No content available.</p>'}
 </body>
@@ -372,8 +372,35 @@ ${toc.join('\n')}
       URL.revokeObjectURL(url);
     }
 
-    async function sleep(ms) {
-      return new Promise(r => setTimeout(r, ms));
+    const CONCURRENCY = 6;
+
+    async function runPool(tasks, concurrency, onDone) {
+      const results = new Array(tasks.length);
+      let next = 0;
+      let done = 0;
+
+      async function worker() {
+        while (next < tasks.length) {
+          const i = next++;
+          results[i] = await tasks[i]();
+          done++;
+          if (onDone) onDone(done, tasks.length);
+        }
+      }
+
+      const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker());
+      await Promise.all(workers);
+      return results;
+    }
+
+    async function fetchWithRetry(url, retries = 2) {
+      for (let i = 0; i <= retries; i++) {
+        try {
+          return await fetchPage(url);
+        } catch (err) {
+          if (i === retries) throw err;
+        }
+      }
     }
 
     async function generate() {
@@ -393,7 +420,6 @@ ${toc.join('\n')}
         // Normalize URL
         let novelUrl = url;
         if (!novelUrl.startsWith('http')) novelUrl = 'https://' + novelUrl;
-        // Ensure it points to freewebnovel.com/novel/slug
         const slugMatch = novelUrl.match(/freewebnovel\.com\/novel\/([^/\s?#]+)/);
         if (!slugMatch) throw new Error('Could not extract novel slug from URL.');
         novelUrl = `${BASE}/novel/${slugMatch[1]}`;
@@ -405,47 +431,34 @@ ${toc.join('\n')}
 
         if (novel.chapters.length === 0) throw new Error('No chapters found for this novel.');
 
+        let failed = 0;
+
         showStatus(
           `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong> by ${escapeHtml(novel.author)}<br>` +
-          `Downloading ${novel.chapters.length} chapters...`,
+          `Downloading ${novel.chapters.length} chapters (${CONCURRENCY} parallel)...`,
           'info'
         );
 
-        // Step 2: Download chapters
-        const chapters = [];
-        let failed = 0;
-
-        for (let i = 0; i < novel.chapters.length; i++) {
+        // Step 2: Download chapters in parallel batches
+        const tasks = novel.chapters.map((ch, i) => async () => {
           try {
-            const chHtml = await fetchPage(novel.chapters[i].url);
-            const ch = parseChapterContent(chHtml);
-            chapters.push({
-              title: ch.title || novel.chapters[i].title,
-              content: ch.content,
-            });
+            const chHtml = await fetchWithRetry(ch.url);
+            const parsed = parseChapterContent(chHtml);
+            return { title: parsed.title || ch.title, content: parsed.content };
           } catch (err) {
             failed++;
-            chapters.push({
-              title: novel.chapters[i].title || `Chapter ${i + 1}`,
-              content: `<p>[Failed to fetch: ${escapeXml(err.message)}]</p>`,
-            });
+            return { title: ch.title || `Chapter ${i + 1}`, content: `<p>[Failed to fetch: ${escapeXml(err.message)}]</p>` };
           }
+        });
 
-          const pct = ((i + 1) / novel.chapters.length) * 100;
-          setProgress(pct);
-
-          // Update status every 10 chapters
-          if ((i + 1) % 10 === 0 || i === novel.chapters.length - 1) {
-            showStatus(
-              `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
-              `Downloaded ${i + 1} / ${novel.chapters.length} chapters${failed ? ` (${failed} failed)` : ''}`,
-              'info'
-            );
-          }
-
-          // Small delay to avoid hammering the proxy
-          if (i < novel.chapters.length - 1) await sleep(300);
-        }
+        const chapters = await runPool(tasks, CONCURRENCY, (done, total) => {
+          setProgress((done / total) * 100);
+          showStatus(
+            `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
+            `Downloaded ${done} / ${total} chapters${failed ? ` (${failed} failed)` : ''}`,
+            'info'
+          );
+        });
 
         // Step 3: Build EPUB
         showStatus('<span class="spinner"></span> Building EPUB...', 'info');

@@ -1,0 +1,15 @@
+{
+  "name": "novel-downloaded",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scrape completed novels from freewebnovel.com and generate EPUB files",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "cli-progress": "^3.12.0",
+    "epub-gen-memory": "^1.0.10",
+    "p-limit": "^6.1.0"
+  }
+}

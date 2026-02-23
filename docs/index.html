@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Novel to EPUB</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0a0b;
+      --surface: #141416;
+      --surface-2: #1c1c1f;
+      --border: #2a2a2e;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+      --accent: #a78bfa;
+      --accent-dim: #7c3aed;
+      --success: #34d399;
+      --error: #f87171;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 640px;
+      padding: 0 20px;
+    }
+
+    header {
+      text-align: center;
+      padding: 60px 0 40px;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+
+    header p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .input-group input {
+      flex: 1;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .input-group input::placeholder { color: var(--text-muted); }
+    .input-group input:focus { border-color: var(--accent-dim); }
+
+    .btn {
+      background: var(--accent-dim);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+      white-space: nowrap;
+    }
+
+    .btn:hover { background: var(--accent); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .setup-section {
+      margin-bottom: 24px;
+    }
+
+    .setup-section label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .setup-section input {
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .setup-section input:focus { border-color: var(--accent-dim); }
+
+    .setup-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .status {
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      display: none;
+      margin-top: 16px;
+      line-height: 1.5;
+    }
+
+    .status.show { display: block; }
+    .status.info { background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); }
+    .status.success { background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.2); }
+    .status.error { background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.2); }
+
+    .status a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .status a:hover { text-decoration: underline; }
+
+    .releases-section { margin-top: 8px; }
+
+    .releases-section h2 {
+      font-size: 1rem;
+      font-weight: 500;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .releases-section h2 .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .releases-section h2 .refresh-btn:hover {
+      border-color: var(--accent-dim);
+      color: var(--text);
+    }
+
+    .release-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .release-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: border-color 0.2s;
+    }
+
+    .release-item:hover { border-color: var(--accent-dim); }
+
+    .release-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .release-name {
+      font-size: 0.85rem;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .release-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .download-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+      flex-shrink: 0;
+      margin-left: 12px;
+    }
+
+    .download-btn:hover {
+      background: var(--accent-dim);
+      color: white;
+      border-color: var(--accent-dim);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 32px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    footer {
+      text-align: center;
+      padding: 40px 0;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+
+    .toggle-setup {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      cursor: pointer;
+      padding: 0;
+      margin-bottom: 16px;
+      transition: color 0.2s;
+    }
+
+    .toggle-setup:hover { color: var(--text); }
+
+    .setup-content {
+      display: none;
+      margin-bottom: 8px;
+    }
+
+    .setup-content.show { display: block; }
+
+    .saved-indicator {
+      color: var(--success);
+      font-size: 0.75rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      margin-left: 8px;
+    }
+
+    .saved-indicator.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Novel to EPUB</h1>
+      <p>Convert freewebnovel.com novels into downloadable EPUB files</p>
+    </header>
+
+    <div class="card">
+      <button class="toggle-setup" onclick="toggleSetup()">
+        Settings <span id="setup-arrow">&#9654;</span>
+        <span class="saved-indicator" id="saved-indicator">Saved</span>
+      </button>
+
+      <div class="setup-content" id="setup-content">
+        <div class="setup-row">
+          <div class="setup-section">
+            <label>GitHub Owner</label>
+            <input type="text" id="owner" placeholder="username" oninput="saveSettings()">
+          </div>
+          <div class="setup-section">
+            <label>Repository</label>
+            <input type="text" id="repo" placeholder="novel-downloaded" oninput="saveSettings()">
+          </div>
+        </div>
+        <div class="setup-section">
+          <label>Personal Access Token</label>
+          <input type="password" id="token" placeholder="ghp_xxxxxxxxxxxx" oninput="saveSettings()">
+          <p class="hint">Needs <code>repo</code> and <code>actions</code> scope. <a href="https://github.com/settings/tokens/new?scopes=repo,workflow&description=Novel+to+EPUB" target="_blank" style="color: var(--accent);">Create token</a></p>
+        </div>
+      </div>
+
+      <div class="input-group">
+        <input type="text" id="novel-url" placeholder="https://freewebnovel.com/novel/omegas-rebirth" onkeydown="if(event.key==='Enter')triggerDownload()">
+        <button class="btn" id="download-btn" onclick="triggerDownload()">Generate</button>
+      </div>
+
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="card releases-section">
+      <h2>
+        Generated EPUBs
+        <button class="refresh-btn" onclick="loadReleases()">Refresh</button>
+      </h2>
+      <div class="release-list" id="release-list">
+        <div class="empty-state">Configure settings and generate your first EPUB</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Powered by <a href="https://github.com" target="_blank">GitHub Actions</a>
+  </footer>
+
+  <script>
+    const WORKFLOW_FILE = 'download-novel.yml';
+
+    function loadSettings() {
+      const s = JSON.parse(localStorage.getItem('novel-epub-settings') || '{}');
+      if (s.owner) document.getElementById('owner').value = s.owner;
+      if (s.repo) document.getElementById('repo').value = s.repo;
+      if (s.token) document.getElementById('token').value = s.token;
+      return s;
+    }
+
+    function saveSettings() {
+      const s = {
+        owner: document.getElementById('owner').value.trim(),
+        repo: document.getElementById('repo').value.trim(),
+        token: document.getElementById('token').value.trim(),
+      };
+      localStorage.setItem('novel-epub-settings', JSON.stringify(s));
+      const indicator = document.getElementById('saved-indicator');
+      indicator.classList.add('show');
+      setTimeout(() => indicator.classList.remove('show'), 1500);
+    }
+
+    function getSettings() {
+      return {
+        owner: document.getElementById('owner').value.trim(),
+        repo: document.getElementById('repo').value.trim(),
+        token: document.getElementById('token').value.trim(),
+      };
+    }
+
+    function toggleSetup() {
+      const content = document.getElementById('setup-content');
+      const arrow = document.getElementById('setup-arrow');
+      const isOpen = content.classList.toggle('show');
+      arrow.innerHTML = isOpen ? '&#9660;' : '&#9654;';
+    }
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('status');
+      el.innerHTML = msg;
+      el.className = `status show ${type}`;
+    }
+
+    function hideStatus() {
+      document.getElementById('status').className = 'status';
+    }
+
+    async function triggerDownload() {
+      const { owner, repo, token } = getSettings();
+      const url = document.getElementById('novel-url').value.trim();
+
+      if (!owner || !repo || !token) {
+        const content = document.getElementById('setup-content');
+        if (!content.classList.contains('show')) toggleSetup();
+        showStatus('Please fill in your GitHub settings above.', 'error');
+        return;
+      }
+
+      if (!url || !url.includes('freewebnovel.com/novel/')) {
+        showStatus('Please enter a valid freewebnovel.com novel URL.', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('download-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Starting...';
+      hideStatus();
+
+      try {
+        const res = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ref: 'main',
+              inputs: { url, delay: '1500' },
+            }),
+          }
+        );
+
+        if (res.status === 204 || res.ok) {
+          const slug = url.match(/\/novel\/([^/]+)/)?.[1] || 'novel';
+          showStatus(
+            `<span class="spinner"></span> Workflow triggered for <strong>${slug}</strong>. ` +
+            `The EPUB will appear below when ready. ` +
+            `<a href="https://github.com/${owner}/${repo}/actions" target="_blank">View progress</a>`,
+            'info'
+          );
+          // Poll for completion
+          pollForRelease(owner, repo, token, slug);
+        } else {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+      } catch (err) {
+        showStatus(`Failed to trigger workflow: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Generate';
+      }
+    }
+
+    async function pollForRelease(owner, repo, token, slug) {
+      const headers = {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+      };
+
+      let attempts = 0;
+      const maxAttempts = 240; // 240 * 15s = 60min max
+      const interval = 15000;
+
+      const poll = setInterval(async () => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          clearInterval(poll);
+          showStatus(
+            `Workflow is still running. Check <a href="https://github.com/${owner}/${repo}/actions" target="_blank">GitHub Actions</a> for status.`,
+            'info'
+          );
+          return;
+        }
+
+        try {
+          // Check latest runs
+          const runsRes = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=1`,
+            { headers }
+          );
+          const runsData = await runsRes.json();
+          const run = runsData.workflow_runs?.[0];
+
+          if (!run) return;
+
+          if (run.status === 'completed') {
+            clearInterval(poll);
+            if (run.conclusion === 'success') {
+              showStatus(
+                `EPUB generated successfully! Refreshing list...`,
+                'success'
+              );
+              await loadReleases();
+            } else {
+              showStatus(
+                `Workflow finished with status: <strong>${run.conclusion}</strong>. ` +
+                `<a href="${run.html_url}" target="_blank">View details</a>`,
+                'error'
+              );
+            }
+          }
+        } catch (e) {
+          // Silently retry
+        }
+      }, interval);
+    }
+
+    async function loadReleases() {
+      const { owner, repo, token } = getSettings();
+      const list = document.getElementById('release-list');
+
+      if (!owner || !repo) {
+        list.innerHTML = '<div class="empty-state">Configure settings to see releases</div>';
+        return;
+      }
+
+      const headers = { 'Accept': 'application/vnd.github.v3+json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      try {
+        const res = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`,
+          { headers }
+        );
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const releases = await res.json();
+
+        if (releases.length === 0) {
+          list.innerHTML = '<div class="empty-state">No EPUBs generated yet. Enter a novel URL above to start.</div>';
+          return;
+        }
+
+        list.innerHTML = releases.map(rel => {
+          const epub = rel.assets?.find(a => a.name.endsWith('.epub'));
+          const date = new Date(rel.created_at).toLocaleDateString('en-US', {
+            month: 'short', day: 'numeric', year: 'numeric'
+          });
+          const size = epub ? `${(epub.size / 1024 / 1024).toFixed(1)} MB` : '';
+
+          return `
+            <div class="release-item">
+              <div class="release-info">
+                <div class="release-name">${escapeHtml(epub?.name || rel.name)}</div>
+                <div class="release-meta">${date}${size ? ` &middot; ${size}` : ''}</div>
+              </div>
+              ${epub
+                ? `<a class="download-btn" href="${epub.browser_download_url}" target="_blank">Download</a>`
+                : `<a class="download-btn" href="${rel.html_url}" target="_blank">View</a>`
+              }
+            </div>
+          `;
+        }).join('');
+
+      } catch (err) {
+        list.innerHTML = `<div class="empty-state">Failed to load releases: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str || '';
+      return div.innerHTML;
+    }
+
+    // Init
+    loadSettings();
+    const { owner, repo } = getSettings();
+    if (owner && repo) {
+      loadReleases();
+    }
+    // Auto-open settings if not configured
+    if (!owner || !repo || !document.getElementById('token').value) {
+      toggleSetup();
+    }
+  </script>
+</body>
+</html>

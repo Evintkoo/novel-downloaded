@@ -1,0 +1,61 @@
+name: Download Novel to EPUB
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Novel URL (e.g., https://freewebnovel.com/novel/omegas-rebirth)'
+        required: true
+        type: string
+      delay:
+        description: 'Delay between requests in ms'
+        required: false
+        default: '1500'
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Extract novel slug
+        id: slug
+        run: |
+          SLUG=$(echo "${{ inputs.url }}" | grep -oP '/novel/\K[^/]+')
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+          echo "Downloading novel: $SLUG"
+
+      - name: Download novel and generate EPUB
+        run: node src/index.js --url "${{ inputs.url }}" --delay "${{ inputs.delay }}"
+
+      - name: Upload EPUB as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: epub-${{ steps.slug.outputs.slug }}
+          path: output/*.epub
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create release with EPUB
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: novel-${{ steps.slug.outputs.slug }}-${{ github.run_number }}
+          name: "${{ steps.slug.outputs.slug }}"
+          body: |
+            EPUB generated from: ${{ inputs.url }}
+            Downloaded via GitHub Actions workflow.
+          files: output/*.epub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

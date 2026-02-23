@@ -179,7 +179,10 @@
   </footer>
 
   <script>
-    const PROXY = 'https://corsproxy.io/?url=';
+    const PROXIES = [
+      (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+      (u) => 'https://corsproxy.io/?' + encodeURIComponent(u),
+    ];
     const BASE = 'https://freewebnovel.com';
 
     function showStatus(msg, type) {
@@ -196,11 +199,17 @@
     }
 
     async function fetchPage(url) {
-      const res = await fetch(PROXY + encodeURIComponent(url), {
-        headers: { 'Accept': 'text/html' }
-      });
-      if (!res.ok) throw new Error(`Failed to fetch ${url} (${res.status})`);
-      return await res.text();
+      let lastErr;
+      for (const proxy of PROXIES) {
+        try {
+          const res = await fetch(proxy(url));
+          if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue; }
+          return await res.text();
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw new Error(`All proxies failed for ${url}: ${lastErr?.message}`);
     }
 
     function parseNovelDetail(html) {

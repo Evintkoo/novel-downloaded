@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Novel to EPUB</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -61,129 +62,73 @@
       margin-bottom: 16px;
     }
 
-    .card-header {
+    .input-group {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
+      gap: 10px;
     }
 
-    .card-header h2 {
-      font-size: 1rem;
-      font-weight: 500;
-    }
-
-    .actions-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: var(--accent-dim);
-      color: white;
-      border-radius: 8px;
-      padding: 10px 20px;
-      font-size: 0.85rem;
-      font-weight: 500;
-      text-decoration: none;
-      transition: background 0.2s;
-      margin-bottom: 16px;
-    }
-
-    .actions-link:hover { background: var(--accent); }
-
-    .hint {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-
-    .refresh-btn {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      border-radius: 6px;
-      padding: 4px 12px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .refresh-btn:hover {
-      border-color: var(--accent-dim);
-      color: var(--text);
-    }
-
-    .release-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .release-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
+    .input-group input {
+      flex: 1;
       background: var(--surface-2);
       border: 1px solid var(--border);
       border-radius: 8px;
+      padding: 12px 16px;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
       transition: border-color 0.2s;
     }
 
-    .release-item:hover { border-color: var(--accent-dim); }
+    .input-group input::placeholder { color: var(--text-muted); }
+    .input-group input:focus { border-color: var(--accent-dim); }
 
-    .release-info {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 0;
-      flex: 1;
-    }
-
-    .release-name {
-      font-size: 0.85rem;
-      font-weight: 500;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .release-meta {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-    }
-
-    .download-btn {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--accent);
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-size: 0.8rem;
-      cursor: pointer;
-      text-decoration: none;
-      transition: all 0.2s;
-      flex-shrink: 0;
-      margin-left: 12px;
-    }
-
-    .download-btn:hover {
+    .btn {
       background: var(--accent-dim);
       color: white;
-      border-color: var(--accent-dim);
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+      white-space: nowrap;
     }
 
-    .empty-state {
-      text-align: center;
-      padding: 32px;
-      color: var(--text-muted);
+    .btn:hover { background: var(--accent); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .status {
+      padding: 16px;
+      border-radius: 8px;
       font-size: 0.85rem;
+      display: none;
+      margin-top: 16px;
+      line-height: 1.6;
     }
 
-    .loading {
-      text-align: center;
-      padding: 32px;
-      color: var(--text-muted);
-      font-size: 0.85rem;
+    .status.show { display: block; }
+    .status.info { background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); }
+    .status.success { background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.2); }
+    .status.error { background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.2); }
+
+    .progress-bar-container {
+      margin-top: 12px;
+      background: var(--surface-2);
+      border-radius: 6px;
+      height: 6px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress-bar-container.show { display: block; }
+
+    .progress-bar {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 6px;
+      width: 0%;
+      transition: width 0.3s;
     }
 
     .spinner {
@@ -214,78 +159,106 @@
   <div class="container">
     <header>
       <h1>Novel to EPUB</h1>
-      <p>Download completed novels from freewebnovel.com as EPUB files</p>
+      <p>Paste a freewebnovel.com link and download the EPUB directly</p>
     </header>
 
-    <div class="card" style="text-align: center;">
-      <a class="actions-link" href="https://github.com/Evintkoo/novel-downloaded/actions/workflows/download-novel.yml" target="_blank">
-        Generate New EPUB
-      </a>
-      <p class="hint">Opens GitHub Actions where you can enter a novel URL to generate an EPUB.</p>
-    </div>
-
     <div class="card">
-      <div class="card-header">
-        <h2>Generated EPUBs</h2>
-        <button class="refresh-btn" onclick="loadReleases()">Refresh</button>
+      <div class="input-group">
+        <input type="text" id="novel-url" placeholder="https://freewebnovel.com/novel/omegas-rebirth" onkeydown="if(event.key==='Enter')generate()">
+        <button class="btn" id="gen-btn" onclick="generate()">Download</button>
       </div>
-      <div class="release-list" id="release-list">
-        <div class="loading"><span class="spinner"></span> Loading releases...</div>
+      <div class="status" id="status"></div>
+      <div class="progress-bar-container" id="progress-container">
+        <div class="progress-bar" id="progress-bar"></div>
       </div>
     </div>
   </div>
 
   <footer>
-    Powered by <a href="https://github.com/Evintkoo/novel-downloaded" target="_blank">GitHub Actions</a>
+    Built with <a href="https://github.com/Evintkoo/novel-downloaded" target="_blank">novel-downloaded</a>
   </footer>
 
   <script>
-    const OWNER = 'Evintkoo';
-    const REPO = 'novel-downloaded';
+    const PROXY = 'https://corsproxy.io/?url=';
+    const BASE = 'https://freewebnovel.com';
 
-    async function loadReleases() {
-      const list = document.getElementById('release-list');
-      list.innerHTML = '<div class="loading"><span class="spinner"></span> Loading releases...</div>';
+    function showStatus(msg, type) {
+      const el = document.getElementById('status');
+      el.innerHTML = msg;
+      el.className = `status show ${type}`;
+    }
 
-      try {
-        const res = await fetch(
-          `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=30`,
-          { headers: { 'Accept': 'application/vnd.github.v3+json' } }
-        );
+    function setProgress(pct) {
+      const container = document.getElementById('progress-container');
+      const bar = document.getElementById('progress-bar');
+      container.classList.toggle('show', pct >= 0);
+      bar.style.width = Math.min(100, pct) + '%';
+    }
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    async function fetchPage(url) {
+      const res = await fetch(PROXY + encodeURIComponent(url), {
+        headers: { 'Accept': 'text/html' }
+      });
+      if (!res.ok) throw new Error(`Failed to fetch ${url} (${res.status})`);
+      return await res.text();
+    }
 
-        const releases = await res.json();
+    function parseNovelDetail(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const title = doc.querySelector('h1.tit')?.textContent.trim()
+        || doc.querySelector('div.m-imgtxt h1')?.textContent.trim() || 'Unknown Title';
 
-        if (releases.length === 0) {
-          list.innerHTML = '<div class="empty-state">No EPUBs generated yet. Click "Generate New EPUB" above to start.</div>';
-          return;
-        }
-
-        list.innerHTML = releases.map(rel => {
-          const epub = rel.assets?.find(a => a.name.endsWith('.epub'));
-          const date = new Date(rel.created_at).toLocaleDateString('en-US', {
-            month: 'short', day: 'numeric', year: 'numeric'
-          });
-          const size = epub ? `${(epub.size / 1024 / 1024).toFixed(1)} MB` : '';
-
-          return `
-            <div class="release-item">
-              <div class="release-info">
-                <div class="release-name">${escapeHtml(epub?.name || rel.name)}</div>
-                <div class="release-meta">${date}${size ? ' &middot; ' + size : ''}</div>
-              </div>
-              ${epub
-                ? `<a class="download-btn" href="${epub.browser_download_url}" target="_blank">Download</a>`
-                : `<a class="download-btn" href="${rel.html_url}" target="_blank">View</a>`
-              }
-            </div>
-          `;
-        }).join('');
-
-      } catch (err) {
-        list.innerHTML = `<div class="empty-state">Failed to load releases: ${escapeHtml(err.message)}</div>`;
+      const items = doc.querySelectorAll('div.m-imgtxt div.txt div.item');
+      let author = 'Unknown Author';
+      if (items.length > 0) {
+        const right = items[0].querySelector('.right a') || items[0].querySelector('.right');
+        if (right) author = right.textContent.trim();
       }
+
+      const genres = [];
+      if (items.length > 1) {
+        items[1].querySelectorAll('.right a').forEach(a => genres.push(a.textContent.trim()));
+      }
+
+      const description = doc.querySelector('meta[name="description"]')?.content || '';
+      const coverUrl = doc.querySelector('div.m-imgtxt div.pic img')?.src || '';
+
+      const chapters = [];
+      doc.querySelectorAll('ul#idData li a').forEach(a => {
+        const chTitle = a.getAttribute('title') || a.textContent.trim();
+        const href = a.getAttribute('href') || '';
+        if (href) {
+          chapters.push({
+            title: chTitle,
+            url: href.startsWith('http') ? href : BASE + href,
+          });
+        }
+      });
+
+      return { title, author, genres, description, coverUrl, chapters };
+    }
+
+    function parseChapterContent(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const article = doc.querySelector('div#article');
+      if (!article) return { title: '', content: '<p>No content found.</p>' };
+
+      const chTitle = article.querySelector('h4')?.textContent.trim()
+        || doc.querySelector('h1.tit')?.textContent.trim() || '';
+
+      article.querySelectorAll('script, .ads, .ad, ins, .google-auto-placed').forEach(el => el.remove());
+
+      const paragraphs = [];
+      article.querySelectorAll('p').forEach(p => {
+        const text = p.textContent.trim();
+        if (text) paragraphs.push('<p>' + escapeXml(text) + '</p>');
+      });
+
+      return { title: chTitle, content: paragraphs.join('\n') };
+    }
+
+    function escapeXml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     function escapeHtml(str) {
@@ -294,7 +267,209 @@
       return div.innerHTML;
     }
 
-    loadReleases();
+    function buildEpub(novel, chapters) {
+      const zip = new JSZip();
+
+      // mimetype must be first and uncompressed
+      zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
+
+      // container.xml
+      zip.file('META-INF/container.xml',
+`<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`);
+
+      // style.css
+      zip.file('OEBPS/style.css',
+`body { font-family: Georgia, serif; line-height: 1.6; margin: 1em; }
+h1 { font-size: 1.4em; text-align: center; margin: 2em 0 1em; page-break-before: always; }
+p { text-indent: 1.5em; margin: 0.4em 0; }`);
+
+      // chapter xhtml files
+      const manifest = [];
+      const spine = [];
+      const toc = [];
+
+      for (let i = 0; i < chapters.length; i++) {
+        const id = `ch${i + 1}`;
+        const filename = `${id}.xhtml`;
+        const ch = chapters[i];
+        const chTitle = escapeXml(ch.title || `Chapter ${i + 1}`);
+
+        zip.file(`OEBPS/${filename}`,
+`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>${chTitle}</title><link rel="stylesheet" href="style.css"/></head>
+<body>
+<h1>${chTitle}</h1>
+${ch.content || '<p>No content available.</p>'}
+</body>
+</html>`);
+
+        manifest.push(`    <item id="${id}" href="${filename}" media-type="application/xhtml+xml"/>`);
+        spine.push(`    <itemref idref="${id}"/>`);
+        toc.push(`    <navPoint id="nav-${id}" playOrder="${i + 1}"><navLabel><text>${chTitle}</text></navLabel><content src="${filename}"/></navPoint>`);
+      }
+
+      // content.opf
+      const safeTitle = escapeXml(novel.title);
+      const safeAuthor = escapeXml(novel.author);
+      const safeDesc = escapeXml(novel.description);
+      const uid = 'novel-' + Date.now();
+
+      zip.file('OEBPS/content.opf',
+`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>${safeTitle}</dc:title>
+    <dc:creator opf:role="aut">${safeAuthor}</dc:creator>
+    <dc:description>${safeDesc}</dc:description>
+    <dc:language>en</dc:language>
+    <dc:identifier id="BookId">${uid}</dc:identifier>
+${novel.genres.map(g => `    <dc:subject>${escapeXml(g)}</dc:subject>`).join('\n')}
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+${manifest.join('\n')}
+  </manifest>
+  <spine toc="ncx">
+${spine.join('\n')}
+  </spine>
+</package>`);
+
+      // toc.ncx
+      zip.file('OEBPS/toc.ncx',
+`<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="${uid}"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle><text>${safeTitle}</text></docTitle>
+  <navMap>
+${toc.join('\n')}
+  </navMap>
+</ncx>`);
+
+      return zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function sleep(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+
+    async function generate() {
+      const url = document.getElementById('novel-url').value.trim();
+      const btn = document.getElementById('gen-btn');
+
+      if (!url || !url.includes('freewebnovel.com')) {
+        showStatus('Please enter a valid freewebnovel.com novel URL.', 'error');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Working...';
+      setProgress(0);
+
+      try {
+        // Normalize URL
+        let novelUrl = url;
+        if (!novelUrl.startsWith('http')) novelUrl = 'https://' + novelUrl;
+        // Ensure it points to freewebnovel.com/novel/slug
+        const slugMatch = novelUrl.match(/freewebnovel\.com\/novel\/([^/\s?#]+)/);
+        if (!slugMatch) throw new Error('Could not extract novel slug from URL.');
+        novelUrl = `${BASE}/novel/${slugMatch[1]}`;
+
+        // Step 1: Fetch novel detail
+        showStatus('<span class="spinner"></span> Fetching novel details...', 'info');
+        const detailHtml = await fetchPage(novelUrl);
+        const novel = parseNovelDetail(detailHtml);
+
+        if (novel.chapters.length === 0) throw new Error('No chapters found for this novel.');
+
+        showStatus(
+          `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong> by ${escapeHtml(novel.author)}<br>` +
+          `Downloading ${novel.chapters.length} chapters...`,
+          'info'
+        );
+
+        // Step 2: Download chapters
+        const chapters = [];
+        let failed = 0;
+
+        for (let i = 0; i < novel.chapters.length; i++) {
+          try {
+            const chHtml = await fetchPage(novel.chapters[i].url);
+            const ch = parseChapterContent(chHtml);
+            chapters.push({
+              title: ch.title || novel.chapters[i].title,
+              content: ch.content,
+            });
+          } catch (err) {
+            failed++;
+            chapters.push({
+              title: novel.chapters[i].title || `Chapter ${i + 1}`,
+              content: `<p>[Failed to fetch: ${escapeXml(err.message)}]</p>`,
+            });
+          }
+
+          const pct = ((i + 1) / novel.chapters.length) * 100;
+          setProgress(pct);
+
+          // Update status every 10 chapters
+          if ((i + 1) % 10 === 0 || i === novel.chapters.length - 1) {
+            showStatus(
+              `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
+              `Downloaded ${i + 1} / ${novel.chapters.length} chapters${failed ? ` (${failed} failed)` : ''}`,
+              'info'
+            );
+          }
+
+          // Small delay to avoid hammering the proxy
+          if (i < novel.chapters.length - 1) await sleep(300);
+        }
+
+        // Step 3: Build EPUB
+        showStatus('<span class="spinner"></span> Building EPUB...', 'info');
+        const blob = await buildEpub(novel, chapters);
+
+        // Step 4: Trigger download
+        const safeTitle = novel.title.replace(/[<>:"/\\|?*]/g, '').trim();
+        downloadBlob(blob, `${safeTitle}.epub`);
+
+        setProgress(-1);
+        showStatus(
+          `<strong>${escapeHtml(novel.title)}</strong> — ${novel.chapters.length} chapters` +
+          (failed ? ` (${failed} failed)` : '') + `<br>EPUB downloaded!`,
+          'success'
+        );
+
+      } catch (err) {
+        setProgress(-1);
+        showStatus(`Error: ${escapeHtml(err.message)}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Download';
+      }
+    }
   </script>
 </body>
 </html>

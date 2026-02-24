@@ -179,11 +179,12 @@
   </footer>
 
   <script>
-    const PROXY = (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u);
+    // Use /get endpoint — always returns 200 JSON, avoids CORS issues on 5xx
+    const PROXY = (u) => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u);
     const BASE = 'https://freewebnovel.com';
-    const DELAY_PER_WORKER = 800;  // ms between requests per worker
-    const WORKER_COUNT = 2;        // 2 staggered workers = ~2.5 req/s effective
-    const MAX_RETRIES = 4;         // retries per request
+    const DELAY_PER_WORKER = 600;  // ms between requests per worker
+    const WORKER_COUNT = 2;        // 2 staggered workers
+    const MAX_RETRIES = 3;         // retries per request
     const FAIL = '__FAIL__';
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -201,30 +202,35 @@
       b.style.width = Math.min(100, pct) + '%';
     }
 
-    // Single fetch with timeout
-    async function rawFetch(url, timeoutMs = 25000) {
+    // Single fetch via allorigins /get (JSON wrapper, always 200)
+    async function rawFetch(url, timeoutMs = 20000) {
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), timeoutMs);
       try {
         const res = await fetch(PROXY(url), { signal: ac.signal });
         clearTimeout(t);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.text();
+        if (!res.ok) throw new Error(`Proxy error ${res.status}`);
+        const json = await res.json();
+        // allorigins returns { contents, status: { http_code } }
+        const code = json.status?.http_code;
+        if (code && code >= 400) throw new Error(`HTTP ${code}`);
+        if (!json.contents) throw new Error('Empty response');
+        return json.contents;
       } catch (err) {
         clearTimeout(t);
         throw err.name === 'AbortError' ? new Error('Timeout') : err;
       }
     }
 
-    // Fetch with retries + exponential backoff
+    // Fetch with retries + short backoff
     async function fetchPage(url) {
       for (let i = 0; i <= MAX_RETRIES; i++) {
         try {
           return await rawFetch(url);
         } catch (err) {
           if (i === MAX_RETRIES) throw err;
-          // Exponential backoff: 2s, 4s, 8s, 16s
-          await sleep(2000 * Math.pow(2, i));
+          // Short backoff: 1.5s, 3s, 4.5s
+          await sleep(1500 * (i + 1));
         }
       }
     }

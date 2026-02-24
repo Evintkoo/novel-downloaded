@@ -179,10 +179,13 @@
   </footer>
 
   <script>
-    const PROXY = (u) => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u);
+    const PROXIES = [
+      (u) => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u),
+      (u) => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u),
+    ];
     const BASE = 'https://freewebnovel.com';
-    const DELAY = 600;
-    const WORKERS = 2;
+    const DELAY = 400;
+    const WORKERS = 3;
     const FAIL = '__FAIL__';
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -200,21 +203,31 @@
       b.style.width = Math.min(100, pct) + '%';
     }
 
-    // Single fetch — no retries, just try once
-    async function fetchOnce(url) {
+    // Fetch via a specific proxy
+    async function fetchVia(proxyFn, url, isJson) {
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 15000);
       try {
-        const res = await fetch(PROXY(url), { signal: ac.signal });
+        const res = await fetch(proxyFn(url), { signal: ac.signal });
         clearTimeout(t);
         if (!res.ok) return null;
-        const json = await res.json();
-        if (json.status?.http_code >= 400) return null;
-        return json.contents || null;
+        if (isJson) {
+          const json = await res.json();
+          if (json.status?.http_code >= 400) return null;
+          return json.contents || null;
+        }
+        return await res.text();
       } catch {
         clearTimeout(t);
         return null;
       }
+    }
+
+    // Try primary proxy (codetabs returns raw HTML), fallback to allorigins (JSON wrapper)
+    async function fetchOnce(url) {
+      const html = await fetchVia(PROXIES[0], url, false);
+      if (html) return html;
+      return await fetchVia(PROXIES[1], url, true);
     }
 
     // Fetch with retries
@@ -224,7 +237,7 @@
         if (html) return html;
         if (i < retries) await sleep(1500 * (i + 1));
       }
-      return null; // all attempts failed
+      return null;
     }
 
     function parseNovelDetail(html) {

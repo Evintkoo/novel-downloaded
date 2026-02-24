@@ -85,6 +85,10 @@ export async function fetchChapterContent(url) {
   const $ = cheerio.load(html);
 
   const article = $('div#article');
+  if (!article.length) {
+    return { title: '', content: '' };
+  }
+
   const chapterTitle = article.find('h4').first().text().trim()
     || $('h1.tit').text().trim()
     || '';

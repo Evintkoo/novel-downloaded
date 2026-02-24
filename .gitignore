@@ -2,3 +2,4 @@ node_modules/
 output/*.epub
 worker/
 proxy/
+.playwright-mcp/

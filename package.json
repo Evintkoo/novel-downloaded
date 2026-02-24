@@ -4,12 +4,14 @@
   "type": "module",
   "description": "Scrape completed novels from freewebnovel.com and generate EPUB files",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "sync": "node sync-library.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
     "cli-progress": "^3.12.0",
     "epub-gen-memory": "^1.0.10",
+    "jszip": "^3.10.1",
     "p-limit": "^6.1.0"
   }
 }

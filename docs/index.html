@@ -181,6 +181,12 @@
   <script>
     const PROXY = (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u);
     const BASE = 'https://freewebnovel.com';
+    const DELAY_PER_WORKER = 800;  // ms between requests per worker
+    const WORKER_COUNT = 2;        // 2 staggered workers = ~2.5 req/s effective
+    const MAX_RETRIES = 4;         // retries per request
+    const FAIL = '__FAIL__';
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
     function showStatus(msg, type) {
       const el = document.getElementById('status');
@@ -189,79 +195,38 @@
     }
 
     function setProgress(pct) {
-      const container = document.getElementById('progress-container');
-      const bar = document.getElementById('progress-bar');
-      container.classList.toggle('show', pct >= 0);
-      bar.style.width = Math.min(100, pct) + '%';
+      const c = document.getElementById('progress-container');
+      const b = document.getElementById('progress-bar');
+      c.classList.toggle('show', pct >= 0);
+      b.style.width = Math.min(100, pct) + '%';
     }
 
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-    // Global rate limiter — max N requests per second
-    const rateLimiter = {
-      queue: [],
-      running: 0,
-      maxConcurrent: 3,
-      minInterval: 400, // ms between request starts
-      lastStart: 0,
-      paused: false,
-
-      async acquire() {
-        while (this.paused) await sleep(500);
-        while (this.running >= this.maxConcurrent) {
-          await sleep(50);
-        }
-        const now = Date.now();
-        const wait = this.minInterval - (now - this.lastStart);
-        if (wait > 0) await sleep(wait);
-        this.running++;
-        this.lastStart = Date.now();
-      },
-
-      release() { this.running--; },
-
-      async pause(ms) {
-        this.paused = true;
-        await sleep(ms);
-        this.paused = false;
+    // Single fetch with timeout
+    async function rawFetch(url, timeoutMs = 25000) {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), timeoutMs);
+      try {
+        const res = await fetch(PROXY(url), { signal: ac.signal });
+        clearTimeout(t);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.text();
+      } catch (err) {
+        clearTimeout(t);
+        throw err.name === 'AbortError' ? new Error('Timeout') : err;
       }
-    };
+    }
 
+    // Fetch with retries + exponential backoff
     async function fetchPage(url) {
-      const MAX_RETRIES = 5;
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        await rateLimiter.acquire();
+      for (let i = 0; i <= MAX_RETRIES; i++) {
         try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 20000);
-          const res = await fetch(PROXY(url), { signal: controller.signal });
-          clearTimeout(timeout);
-
-          if (res.status === 429) {
-            rateLimiter.release();
-            const backoff = 2000 * Math.pow(2, Math.min(attempt, 3));
-            rateLimiter.pause(backoff); // pause ALL requests
-            continue;
-          }
-          if (!res.ok) {
-            rateLimiter.release();
-            if (attempt < MAX_RETRIES) { await sleep(1000); continue; }
-            throw new Error(`HTTP ${res.status}`);
-          }
-          const text = await res.text();
-          rateLimiter.release();
-          return text;
+          return await rawFetch(url);
         } catch (err) {
-          rateLimiter.release();
-          if (err.name === 'AbortError') {
-            if (attempt < MAX_RETRIES) { await sleep(1000); continue; }
-            throw new Error('Timeout');
-          }
-          if (attempt < MAX_RETRIES) { await sleep(1000 * (attempt + 1)); continue; }
-          throw err;
+          if (i === MAX_RETRIES) throw err;
+          // Exponential backoff: 2s, 4s, 8s, 16s
+          await sleep(2000 * Math.pow(2, i));
         }
       }
-      throw new Error(`Failed after retries: ${url}`);
     }
 
     function parseNovelDetail(html) {
@@ -323,18 +288,16 @@
     }
 
     function escapeHtml(str) {
-      const div = document.createElement('div');
-      div.textContent = str || '';
-      return div.innerHTML;
+      const d = document.createElement('div');
+      d.textContent = str || '';
+      return d.innerHTML;
     }
 
     function buildEpub(novel, chapters) {
       const zip = new JSZip();
 
-      // mimetype must be first and uncompressed
       zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
 
-      // container.xml
       zip.file('META-INF/container.xml',
 `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -343,52 +306,47 @@
   </rootfiles>
 </container>`);
 
-      // style.css — each chapter file is its own page, no mid-chapter breaks
       zip.file('OEBPS/style.css',
 `body { font-family: Georgia, serif; line-height: 1.8; margin: 1em; padding: 0; }
 h1 { font-size: 1.4em; text-align: center; margin: 0 0 1.5em; padding-top: 2em; }
 p { text-indent: 1.5em; margin: 0.5em 0; orphans: 3; widows: 3; }`);
 
-      // chapter xhtml files
-      const manifest = [];
-      const spine = [];
-      const toc = [];
+      const manifest = [], spine = [], toc = [];
 
       for (let i = 0; i < chapters.length; i++) {
         const id = `ch${i + 1}`;
-        const filename = `${id}.xhtml`;
+        const fn = `${id}.xhtml`;
         const ch = chapters[i];
-        const chTitle = escapeXml(ch.title || `Chapter ${i + 1}`);
+        const t = escapeXml(ch.title || `Chapter ${i + 1}`);
 
-        zip.file(`OEBPS/${filename}`,
+        zip.file(`OEBPS/${fn}`,
 `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>${chTitle}</title><link rel="stylesheet" href="style.css"/></head>
+<head><title>${t}</title><link rel="stylesheet" href="style.css"/></head>
 <body style="page-break-before:always; page-break-after:always;">
-<h1>${chTitle}</h1>
+<h1>${t}</h1>
 ${ch.content || '<p>No content available.</p>'}
 </body>
 </html>`);
 
-        manifest.push(`    <item id="${id}" href="${filename}" media-type="application/xhtml+xml"/>`);
+        manifest.push(`    <item id="${id}" href="${fn}" media-type="application/xhtml+xml"/>`);
         spine.push(`    <itemref idref="${id}"/>`);
-        toc.push(`    <navPoint id="nav-${id}" playOrder="${i + 1}"><navLabel><text>${chTitle}</text></navLabel><content src="${filename}"/></navPoint>`);
+        toc.push(`    <navPoint id="nav-${id}" playOrder="${i + 1}"><navLabel><text>${t}</text></navLabel><content src="${fn}"/></navPoint>`);
       }
 
-      // content.opf
-      const safeTitle = escapeXml(novel.title);
-      const safeAuthor = escapeXml(novel.author);
-      const safeDesc = escapeXml(novel.description);
+      const st = escapeXml(novel.title);
+      const sa = escapeXml(novel.author);
+      const sd = escapeXml(novel.description);
       const uid = 'novel-' + Date.now();
 
       zip.file('OEBPS/content.opf',
 `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-    <dc:title>${safeTitle}</dc:title>
-    <dc:creator opf:role="aut">${safeAuthor}</dc:creator>
-    <dc:description>${safeDesc}</dc:description>
+    <dc:title>${st}</dc:title>
+    <dc:creator opf:role="aut">${sa}</dc:creator>
+    <dc:description>${sd}</dc:description>
     <dc:language>en</dc:language>
     <dc:identifier id="BookId">${uid}</dc:identifier>
 ${novel.genres.map(g => `    <dc:subject>${escapeXml(g)}</dc:subject>`).join('\n')}
@@ -403,7 +361,6 @@ ${spine.join('\n')}
   </spine>
 </package>`);
 
-      // toc.ncx
       zip.file('OEBPS/toc.ncx',
 `<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
@@ -413,7 +370,7 @@ ${spine.join('\n')}
     <meta name="dtb:totalPageCount" content="0"/>
     <meta name="dtb:maxPageNumber" content="0"/>
   </head>
-  <docTitle><text>${safeTitle}</text></docTitle>
+  <docTitle><text>${st}</text></docTitle>
   <navMap>
 ${toc.join('\n')}
   </navMap>
@@ -423,18 +380,25 @@ ${toc.join('\n')}
     }
 
     function downloadBlob(blob, filename) {
-      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
+      a.href = URL.createObjectURL(blob);
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(a.href);
     }
 
-    const WORKERS = 3;
-    const FAIL_MARKER = '__FAILED__';
+    // Download a single chapter with retries, returns result object
+    async function downloadChapter(ch, index) {
+      try {
+        const html = await fetchPage(ch.url);
+        const parsed = parseChapterContent(html);
+        return { title: parsed.title || ch.title, content: parsed.content };
+      } catch {
+        return { title: ch.title || `Chapter ${index + 1}`, content: FAIL };
+      }
+    }
 
     async function generate() {
       const url = document.getElementById('novel-url').value.trim();
@@ -467,78 +431,92 @@ ${toc.join('\n')}
         const total = novel.chapters.length;
         const chapters = new Array(total);
         let done = 0;
-        let failed = 0;
         let next = 0;
+        const startTime = Date.now();
 
         function updateUI() {
-          setProgress((done / total) * 100);
+          const pct = (done / total) * 100;
+          setProgress(pct);
+          const elapsed = (Date.now() - startTime) / 1000;
+          const rate = done / Math.max(elapsed, 1);
+          const remaining = rate > 0 ? Math.ceil((total - done) / rate) : 0;
+          const mins = Math.floor(remaining / 60);
+          const secs = remaining % 60;
+          const eta = done > 5 ? ` — ~${mins > 0 ? mins + 'm ' : ''}${secs}s left` : '';
+          const failCount = chapters.filter(c => c && c.content === FAIL).length;
+
           showStatus(
-            `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong> by ${escapeHtml(novel.author)}<br>` +
-            `Downloaded ${done} / ${total} chapters` +
-            (failed ? ` — ${failed} retrying` : '') +
-            (rateLimiter.paused ? ' — rate limited, waiting...' : ''),
+            `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
+            `${done} / ${total} chapters` +
+            (failCount > 0 ? ` (${failCount} to retry)` : '') +
+            eta,
             'info'
           );
         }
 
         updateUI();
 
-        // Step 2: Download all chapters with rate-limited workers
+        // Step 2: Download with 2 staggered workers
         async function worker() {
           while (next < total) {
             const i = next++;
-            const ch = novel.chapters[i];
-            try {
-              const chHtml = await fetchPage(ch.url);
-              const parsed = parseChapterContent(chHtml);
-              chapters[i] = { title: parsed.title || ch.title, content: parsed.content };
-            } catch {
-              chapters[i] = { title: ch.title || `Chapter ${i + 1}`, content: FAIL_MARKER, url: ch.url };
-              failed++;
-            }
+            const t0 = Date.now();
+            chapters[i] = await downloadChapter(novel.chapters[i], i);
             done++;
             updateUI();
+            // Enforce minimum delay per worker
+            const elapsed = Date.now() - t0;
+            const wait = DELAY_PER_WORKER - elapsed;
+            if (wait > 0 && next < total) await sleep(wait);
           }
         }
 
-        await Promise.all(Array.from({ length: WORKERS }, () => worker()));
-
-        // Step 3: Retry failed chapters — slower, one at a time
-        const failedIdxs = [];
-        for (let i = 0; i < total; i++) {
-          if (chapters[i].content === FAIL_MARKER) failedIdxs.push(i);
+        // Stagger worker starts by half the interval
+        const workers = [];
+        for (let w = 0; w < WORKER_COUNT; w++) {
+          workers.push(worker());
+          if (w < WORKER_COUNT - 1) await sleep(DELAY_PER_WORKER / 2);
         }
+        await Promise.all(workers);
 
-        if (failedIdxs.length > 0) {
+        // Step 3: Retry all failures — up to 3 full retry passes
+        for (let pass = 1; pass <= 3; pass++) {
+          const failedIdxs = [];
+          for (let i = 0; i < total; i++) {
+            if (chapters[i].content === FAIL) failedIdxs.push(i);
+          }
+          if (failedIdxs.length === 0) break;
+
           showStatus(
             `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
-            `Retrying ${failedIdxs.length} failed chapters...`,
+            `Retry pass ${pass}/3 — ${failedIdxs.length} chapters to recover...`,
             'info'
           );
 
-          // Wait for rate limits to reset
-          await sleep(5000);
+          // Wait before retry pass to let server recover
+          await sleep(3000 * pass);
 
           for (let r = 0; r < failedIdxs.length; r++) {
             const i = failedIdxs[r];
-            const ch = novel.chapters[i];
-            try {
-              const chHtml = await fetchPage(ch.url);
-              const parsed = parseChapterContent(chHtml);
-              chapters[i] = { title: parsed.title || ch.title, content: parsed.content };
-              failed--;
-            } catch {
-              chapters[i] = { title: ch.title || `Chapter ${i + 1}`, content: '<p>[Chapter unavailable]</p>' };
-            }
+            chapters[i] = await downloadChapter(novel.chapters[i], i);
             showStatus(
               `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
-              `Retrying: ${r + 1} / ${failedIdxs.length}` + (failed > 0 ? ` (${failed} remaining)` : ''),
+              `Retry pass ${pass}/3: ${r + 1} / ${failedIdxs.length}`,
               'info'
             );
+            // Slower pace for retries
+            await sleep(1200);
           }
         }
 
-        const finalFailed = chapters.filter(c => c.content === '<p>[Chapter unavailable]</p>').length;
+        // Mark any still-failed chapters
+        let finalFailed = 0;
+        for (let i = 0; i < total; i++) {
+          if (chapters[i].content === FAIL) {
+            chapters[i].content = '<p>[Chapter unavailable]</p>';
+            finalFailed++;
+          }
+        }
 
         // Step 4: Build EPUB
         showStatus('<span class="spinner"></span> Building EPUB...', 'info');
@@ -551,7 +529,8 @@ ${toc.join('\n')}
         setProgress(-1);
         showStatus(
           `<strong>${escapeHtml(novel.title)}</strong> — ${total} chapters` +
-          (finalFailed ? ` (${finalFailed} unavailable)` : '') + `<br>EPUB downloaded!`,
+          (finalFailed ? ` (${finalFailed} unavailable)` : '') +
+          `<br>EPUB downloaded!`,
           'success'
         );
 

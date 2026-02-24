@@ -179,10 +179,7 @@
   </footer>
 
   <script>
-    const PROXY_FNS = [
-      (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
-      (u) => 'https://corsproxy.io/?' + encodeURIComponent(u),
-    ];
+    const PROXY = (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u);
     const BASE = 'https://freewebnovel.com';
 
     function showStatus(msg, type) {
@@ -200,28 +197,71 @@
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-    async function fetchPage(url) {
-      const MAX_RETRIES = 4;
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        for (const proxy of PROXY_FNS) {
-          try {
-            const res = await fetch(proxy(url));
-            if (res.status === 429) {
-              // Rate limited — back off exponentially
-              const wait = Math.min(1000 * Math.pow(2, attempt), 8000);
-              await sleep(wait);
-              break; // retry from outer loop
-            }
-            if (!res.ok) continue; // try next proxy
-            return await res.text();
-          } catch (err) {
-            continue; // try next proxy
-          }
+    // Global rate limiter — max N requests per second
+    const rateLimiter = {
+      queue: [],
+      running: 0,
+      maxConcurrent: 3,
+      minInterval: 400, // ms between request starts
+      lastStart: 0,
+      paused: false,
+
+      async acquire() {
+        while (this.paused) await sleep(500);
+        while (this.running >= this.maxConcurrent) {
+          await sleep(50);
         }
-        // If we exhausted proxies on this attempt, wait before retrying
-        if (attempt < MAX_RETRIES) await sleep(500 * (attempt + 1));
+        const now = Date.now();
+        const wait = this.minInterval - (now - this.lastStart);
+        if (wait > 0) await sleep(wait);
+        this.running++;
+        this.lastStart = Date.now();
+      },
+
+      release() { this.running--; },
+
+      async pause(ms) {
+        this.paused = true;
+        await sleep(ms);
+        this.paused = false;
       }
-      throw new Error(`Failed after ${MAX_RETRIES + 1} attempts: ${url}`);
+    };
+
+    async function fetchPage(url) {
+      const MAX_RETRIES = 5;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        await rateLimiter.acquire();
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 20000);
+          const res = await fetch(PROXY(url), { signal: controller.signal });
+          clearTimeout(timeout);
+
+          if (res.status === 429) {
+            rateLimiter.release();
+            const backoff = 2000 * Math.pow(2, Math.min(attempt, 3));
+            rateLimiter.pause(backoff); // pause ALL requests
+            continue;
+          }
+          if (!res.ok) {
+            rateLimiter.release();
+            if (attempt < MAX_RETRIES) { await sleep(1000); continue; }
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const text = await res.text();
+          rateLimiter.release();
+          return text;
+        } catch (err) {
+          rateLimiter.release();
+          if (err.name === 'AbortError') {
+            if (attempt < MAX_RETRIES) { await sleep(1000); continue; }
+            throw new Error('Timeout');
+          }
+          if (attempt < MAX_RETRIES) { await sleep(1000 * (attempt + 1)); continue; }
+          throw err;
+        }
+      }
+      throw new Error(`Failed after retries: ${url}`);
     }
 
     function parseNovelDetail(html) {
@@ -393,28 +433,8 @@ ${toc.join('\n')}
       URL.revokeObjectURL(url);
     }
 
-    const CONCURRENCY = 4;
+    const WORKERS = 3;
     const FAIL_MARKER = '__FAILED__';
-
-    async function runPool(items, concurrency, fn, onProgress) {
-      const results = new Array(items.length);
-      let next = 0;
-      let done = 0;
-
-      async function worker() {
-        while (next < items.length) {
-          const i = next++;
-          results[i] = await fn(items[i], i);
-          done++;
-          if (onProgress) onProgress(done, items.length);
-        }
-      }
-
-      await Promise.all(
-        Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
-      );
-      return results;
-    }
 
     async function generate() {
       const url = document.getElementById('novel-url').value.trim();
@@ -445,34 +465,50 @@ ${toc.join('\n')}
         if (novel.chapters.length === 0) throw new Error('No chapters found for this novel.');
 
         const total = novel.chapters.length;
+        const chapters = new Array(total);
+        let done = 0;
+        let failed = 0;
+        let next = 0;
 
-        showStatus(
-          `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong> by ${escapeHtml(novel.author)}<br>` +
-          `Downloading ${total} chapters...`,
-          'info'
-        );
-
-        // Step 2: First pass — download all chapters with concurrency
-        const chapters = await runPool(novel.chapters, CONCURRENCY, async (ch, i) => {
-          try {
-            const chHtml = await fetchPage(ch.url);
-            const parsed = parseChapterContent(chHtml);
-            return { title: parsed.title || ch.title, content: parsed.content };
-          } catch {
-            return { title: ch.title || `Chapter ${i + 1}`, content: FAIL_MARKER, url: ch.url };
-          }
-        }, (done) => {
+        function updateUI() {
           setProgress((done / total) * 100);
-          const failCount = chapters ? chapters.filter(c => c && c.content === FAIL_MARKER).length : 0;
           showStatus(
-            `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
-            `Downloaded ${done} / ${total} chapters` + (failCount ? ` (retrying ${failCount} later)` : ''),
+            `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong> by ${escapeHtml(novel.author)}<br>` +
+            `Downloaded ${done} / ${total} chapters` +
+            (failed ? ` — ${failed} retrying` : '') +
+            (rateLimiter.paused ? ' — rate limited, waiting...' : ''),
             'info'
           );
-        });
+        }
 
-        // Step 3: Retry pass — re-fetch failed chapters one at a time with longer backoff
-        const failedIdxs = chapters.map((c, i) => c.content === FAIL_MARKER ? i : -1).filter(i => i >= 0);
+        updateUI();
+
+        // Step 2: Download all chapters with rate-limited workers
+        async function worker() {
+          while (next < total) {
+            const i = next++;
+            const ch = novel.chapters[i];
+            try {
+              const chHtml = await fetchPage(ch.url);
+              const parsed = parseChapterContent(chHtml);
+              chapters[i] = { title: parsed.title || ch.title, content: parsed.content };
+            } catch {
+              chapters[i] = { title: ch.title || `Chapter ${i + 1}`, content: FAIL_MARKER, url: ch.url };
+              failed++;
+            }
+            done++;
+            updateUI();
+          }
+        }
+
+        await Promise.all(Array.from({ length: WORKERS }, () => worker()));
+
+        // Step 3: Retry failed chapters — slower, one at a time
+        const failedIdxs = [];
+        for (let i = 0; i < total; i++) {
+          if (chapters[i].content === FAIL_MARKER) failedIdxs.push(i);
+        }
+
         if (failedIdxs.length > 0) {
           showStatus(
             `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
@@ -480,21 +516,23 @@ ${toc.join('\n')}
             'info'
           );
 
+          // Wait for rate limits to reset
+          await sleep(5000);
+
           for (let r = 0; r < failedIdxs.length; r++) {
             const i = failedIdxs[r];
             const ch = novel.chapters[i];
-            // Wait a bit between retries to let rate limits reset
-            if (r > 0) await sleep(1500);
             try {
               const chHtml = await fetchPage(ch.url);
               const parsed = parseChapterContent(chHtml);
               chapters[i] = { title: parsed.title || ch.title, content: parsed.content };
+              failed--;
             } catch {
               chapters[i] = { title: ch.title || `Chapter ${i + 1}`, content: '<p>[Chapter unavailable]</p>' };
             }
             showStatus(
               `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
-              `Retrying failed chapters: ${r + 1} / ${failedIdxs.length}`,
+              `Retrying: ${r + 1} / ${failedIdxs.length}` + (failed > 0 ? ` (${failed} remaining)` : ''),
               'info'
             );
           }

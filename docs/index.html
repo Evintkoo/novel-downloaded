@@ -179,12 +179,10 @@
   </footer>
 
   <script>
-    // Use /get endpoint — always returns 200 JSON, avoids CORS issues on 5xx
     const PROXY = (u) => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u);
     const BASE = 'https://freewebnovel.com';
-    const DELAY_PER_WORKER = 600;  // ms between requests per worker
-    const WORKER_COUNT = 2;        // 2 staggered workers
-    const MAX_RETRIES = 3;         // retries per request
+    const DELAY = 600;
+    const WORKERS = 2;
     const FAIL = '__FAIL__';
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -202,37 +200,31 @@
       b.style.width = Math.min(100, pct) + '%';
     }
 
-    // Single fetch via allorigins /get (JSON wrapper, always 200)
-    async function rawFetch(url, timeoutMs = 20000) {
+    // Single fetch — no retries, just try once
+    async function fetchOnce(url) {
       const ac = new AbortController();
-      const t = setTimeout(() => ac.abort(), timeoutMs);
+      const t = setTimeout(() => ac.abort(), 15000);
       try {
         const res = await fetch(PROXY(url), { signal: ac.signal });
         clearTimeout(t);
-        if (!res.ok) throw new Error(`Proxy error ${res.status}`);
+        if (!res.ok) return null;
         const json = await res.json();
-        // allorigins returns { contents, status: { http_code } }
-        const code = json.status?.http_code;
-        if (code && code >= 400) throw new Error(`HTTP ${code}`);
-        if (!json.contents) throw new Error('Empty response');
-        return json.contents;
-      } catch (err) {
+        if (json.status?.http_code >= 400) return null;
+        return json.contents || null;
+      } catch {
         clearTimeout(t);
-        throw err.name === 'AbortError' ? new Error('Timeout') : err;
+        return null;
       }
     }
 
-    // Fetch with retries + short backoff
-    async function fetchPage(url) {
-      for (let i = 0; i <= MAX_RETRIES; i++) {
-        try {
-          return await rawFetch(url);
-        } catch (err) {
-          if (i === MAX_RETRIES) throw err;
-          // Short backoff: 1.5s, 3s, 4.5s
-          await sleep(1500 * (i + 1));
-        }
+    // Fetch with retries
+    async function fetchPage(url, retries = 0) {
+      for (let i = 0; i <= retries; i++) {
+        const html = await fetchOnce(url);
+        if (html) return html;
+        if (i < retries) await sleep(1500 * (i + 1));
       }
+      return null; // all attempts failed
     }
 
     function parseNovelDetail(html) {
@@ -395,15 +387,12 @@ ${toc.join('\n')}
       URL.revokeObjectURL(a.href);
     }
 
-    // Download a single chapter with retries, returns result object
-    async function downloadChapter(ch, index) {
-      try {
-        const html = await fetchPage(ch.url);
-        const parsed = parseChapterContent(html);
-        return { title: parsed.title || ch.title, content: parsed.content };
-      } catch {
-        return { title: ch.title || `Chapter ${index + 1}`, content: FAIL };
-      }
+    // Download a single chapter (no retries by default)
+    async function downloadChapter(ch, index, retries) {
+      const html = await fetchPage(ch.url, retries);
+      if (!html) return { title: ch.title || `Chapter ${index + 1}`, content: FAIL };
+      const parsed = parseChapterContent(html);
+      return { title: parsed.title || ch.title, content: parsed.content };
     }
 
     async function generate() {
@@ -427,9 +416,10 @@ ${toc.join('\n')}
         if (!slugMatch) throw new Error('Could not extract novel slug from URL.');
         novelUrl = `${BASE}/novel/${slugMatch[1]}`;
 
-        // Step 1: Fetch novel detail
+        // Step 1: Fetch novel detail (with 2 retries for the important detail page)
         showStatus('<span class="spinner"></span> Fetching novel details...', 'info');
-        const detailHtml = await fetchPage(novelUrl);
+        const detailHtml = await fetchPage(novelUrl, 2);
+        if (!detailHtml) throw new Error('Failed to fetch novel details. Please try again.');
         const novel = parseNovelDetail(detailHtml);
 
         if (novel.chapters.length === 0) throw new Error('No chapters found for this novel.');
@@ -462,30 +452,28 @@ ${toc.join('\n')}
 
         updateUI();
 
-        // Step 2: Download with 2 staggered workers
+        // Step 2: Fast first pass — no retries, workers never block on failures
         async function worker() {
           while (next < total) {
             const i = next++;
             const t0 = Date.now();
-            chapters[i] = await downloadChapter(novel.chapters[i], i);
+            chapters[i] = await downloadChapter(novel.chapters[i], i, 0);
             done++;
             updateUI();
-            // Enforce minimum delay per worker
             const elapsed = Date.now() - t0;
-            const wait = DELAY_PER_WORKER - elapsed;
+            const wait = DELAY - elapsed;
             if (wait > 0 && next < total) await sleep(wait);
           }
         }
 
-        // Stagger worker starts by half the interval
         const workers = [];
-        for (let w = 0; w < WORKER_COUNT; w++) {
+        for (let w = 0; w < WORKERS; w++) {
           workers.push(worker());
-          if (w < WORKER_COUNT - 1) await sleep(DELAY_PER_WORKER / 2);
+          if (w < WORKERS - 1) await sleep(DELAY / 2);
         }
         await Promise.all(workers);
 
-        // Step 3: Retry all failures — up to 3 full retry passes
+        // Step 3: Retry failed chapters — up to 3 passes with increasing retries
         for (let pass = 1; pass <= 3; pass++) {
           const failedIdxs = [];
           for (let i = 0; i < total; i++) {
@@ -499,19 +487,18 @@ ${toc.join('\n')}
             'info'
           );
 
-          // Wait before retry pass to let server recover
-          await sleep(3000 * pass);
+          // Wait before retry pass
+          await sleep(2000 * pass);
 
           for (let r = 0; r < failedIdxs.length; r++) {
             const i = failedIdxs[r];
-            chapters[i] = await downloadChapter(novel.chapters[i], i);
+            chapters[i] = await downloadChapter(novel.chapters[i], i, pass);
             showStatus(
               `<span class="spinner"></span> <strong>${escapeHtml(novel.title)}</strong><br>` +
               `Retry pass ${pass}/3: ${r + 1} / ${failedIdxs.length}`,
               'info'
             );
-            // Slower pace for retries
-            await sleep(1200);
+            await sleep(800);
           }
         }
 

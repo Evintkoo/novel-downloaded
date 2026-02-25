@@ -86,7 +86,7 @@ export async function fetchChapterContent(url) {
 
   const article = $('div#article');
   if (!article.length) {
-    return { title: '', content: '' };
+    throw new Error(`No article div found at ${url}`);
   }
 
   const chapterTitle = article.find('h4').first().text().trim()
@@ -104,6 +104,10 @@ export async function fetchChapterContent(url) {
       paragraphs.push(`<p>${text}</p>`);
     }
   });
+
+  if (paragraphs.length === 0) {
+    throw new Error(`No paragraphs found at ${url}`);
+  }
 
   const content = paragraphs.join('\n');
 

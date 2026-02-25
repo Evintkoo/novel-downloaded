@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
 
-const INPUT_DIR = 'output';
-const OUTPUT_DIR = 'docs/epubs';
-const MANIFEST_PATH = path.join(OUTPUT_DIR, 'manifest.json');
+const DEFAULT_INPUT_DIR = 'output';
+const DEFAULT_OUTPUT_DIR = 'docs/epubs';
 
 function slugify(title) {
   return title
@@ -51,19 +50,32 @@ async function extractMetadata(epubPath) {
   return { title, author, chapters: chapterFiles.length };
 }
 
-async function main() {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+export async function syncLibrary(inputDir = DEFAULT_INPUT_DIR, outputDir = DEFAULT_OUTPUT_DIR) {
+  fs.mkdirSync(outputDir, { recursive: true });
 
-  const files = fs.readdirSync(INPUT_DIR).filter(f => f.endsWith('.epub'));
+  const manifestPath = path.join(outputDir, 'manifest.json');
+
+  // Load existing manifest to merge with
+  let existingManifest = [];
+  if (fs.existsSync(manifestPath)) {
+    try {
+      existingManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    } catch {
+      existingManifest = [];
+    }
+  }
+  const existingSlugs = new Set(existingManifest.map(e => e.slug));
+
+  const files = fs.readdirSync(inputDir).filter(f => f.endsWith('.epub'));
   if (files.length === 0) {
-    console.log('No EPUBs found in output/');
-    return;
+    console.log('No EPUBs found in ' + inputDir);
+    return existingManifest;
   }
 
-  const manifest = [];
+  let newCount = 0;
 
   for (const file of files) {
-    const srcPath = path.join(INPUT_DIR, file);
+    const srcPath = path.join(inputDir, file);
     const meta = await extractMetadata(srcPath);
     if (!meta) {
       console.log(`  Skipping ${file} — could not read metadata`);
@@ -71,13 +83,19 @@ async function main() {
     }
 
     const slug = slugify(meta.title);
+
+    // Skip if already in manifest
+    if (existingSlugs.has(slug)) {
+      continue;
+    }
+
     const destFile = `${slug}.epub`;
-    const destPath = path.join(OUTPUT_DIR, destFile);
+    const destPath = path.join(outputDir, destFile);
     const stat = fs.statSync(srcPath);
 
     fs.copyFileSync(srcPath, destPath);
 
-    manifest.push({
+    existingManifest.push({
       slug,
       file: destFile,
       title: meta.title,
@@ -85,15 +103,27 @@ async function main() {
       chapters: meta.chapters,
       size: stat.size,
     });
+    existingSlugs.add(slug);
+    newCount++;
 
     console.log(`  ${meta.title} → ${destFile}`);
   }
 
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
-  console.log(`\nManifest written: ${MANIFEST_PATH} (${manifest.length} novels)`);
+  fs.writeFileSync(manifestPath, JSON.stringify(existingManifest, null, 2));
+  console.log(`\nManifest written: ${manifestPath} (${existingManifest.length} total, ${newCount} new)`);
+
+  return existingManifest;
 }
 
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+// Run directly
+const isMain = process.argv[1] && (
+  process.argv[1].endsWith('sync-library.js') ||
+  process.argv[1].endsWith('sync-library')
+);
+
+if (isMain) {
+  syncLibrary().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}

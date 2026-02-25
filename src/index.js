@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import cliProgress from 'cli-progress';
+import pLimit from 'p-limit';
 import { fetchNovelList, fetchNovelDetail, fetchChapterContent } from './scraper.js';
 import { buildEpub } from './epub-builder.js';
 import { delay, sanitizeFilename } from './utils.js';
@@ -153,7 +154,7 @@ async function downloadNovel(slug, delayMs, concurrency, outputDir) {
     return false;
   }
 
-  // Download chapters sequentially to avoid rate limiting
+  // Download chapters in parallel with p-limit
   const bar = new cliProgress.SingleBar({
     format: '  Downloading [{bar}] {percentage}% | {value}/{total} chapters',
     barCompleteChar: '\u2588',
@@ -164,33 +165,94 @@ async function downloadNovel(slug, delayMs, concurrency, outputDir) {
   bar.start(novel.chapters.length, 0);
 
   const chapters = new Array(novel.chapters.length);
+  const limit = pLimit(concurrency);
+  let completed = 0;
 
+  // First pass — parallel download
+  const tasks = novel.chapters.map((ch, i) =>
+    limit(async () => {
+      if (i > 0) await delay(delayMs);
+      try {
+        const content = await fetchChapterContent(ch.url);
+        if (!content.content || content.content.trim() === '') {
+          throw new Error('Empty content returned');
+        }
+        chapters[i] = {
+          title: content.title || ch.title,
+          content: content.content,
+        };
+      } catch {
+        chapters[i] = null; // mark for retry
+      }
+      bar.update(++completed);
+    })
+  );
+
+  await Promise.all(tasks);
+  bar.stop();
+
+  // Multi-pass retry for failed/empty chapters
+  const MAX_RETRY_PASSES = 2;
+  for (let pass = 1; pass <= MAX_RETRY_PASSES; pass++) {
+    const failedIndices = chapters
+      .map((ch, i) => (ch === null ? i : -1))
+      .filter(i => i !== -1);
+
+    if (failedIndices.length === 0) break;
+
+    console.log(`  Retry pass ${pass}: ${failedIndices.length} chapter${failedIndices.length > 1 ? 's' : ''} to retry...`);
+    await delay(delayMs * 2);
+
+    const retryBar = new cliProgress.SingleBar({
+      format: '  Retrying  [{bar}] {percentage}% | {value}/{total} chapters',
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591',
+      hideCursor: true,
+    });
+    retryBar.start(failedIndices.length, 0);
+    let retryCompleted = 0;
+
+    const retryTasks = failedIndices.map(i =>
+      limit(async () => {
+        await delay(delayMs);
+        const ch = novel.chapters[i];
+        try {
+          const content = await fetchChapterContent(ch.url);
+          if (!content.content || content.content.trim() === '') {
+            throw new Error('Empty content returned');
+          }
+          chapters[i] = {
+            title: content.title || ch.title,
+            content: content.content,
+          };
+        } catch {
+          chapters[i] = null;
+        }
+        retryBar.update(++retryCompleted);
+      })
+    );
+
+    await Promise.all(retryTasks);
+    retryBar.stop();
+  }
+
+  // Fill remaining failures with error placeholders
   let failedChapters = 0;
-  for (let i = 0; i < novel.chapters.length; i++) {
-    const ch = novel.chapters[i];
-    try {
-      const content = await fetchChapterContent(ch.url);
-      chapters[i] = {
-        title: content.title || ch.title,
-        content: content.content,
-      };
-    } catch (err) {
+  const failedList = [];
+  for (let i = 0; i < chapters.length; i++) {
+    if (chapters[i] === null) {
       failedChapters++;
+      failedList.push(i + 1);
       chapters[i] = {
-        title: ch.title || `Chapter ${i + 1}`,
-        content: `<p>[Failed to fetch: ${err.message}]</p>`,
+        title: novel.chapters[i].title || `Chapter ${i + 1}`,
+        content: `<p>[Failed to fetch after retries]</p>`,
       };
-    }
-    bar.update(i + 1);
-    if (i < novel.chapters.length - 1) {
-      await delay(delayMs);
     }
   }
 
-  bar.stop();
-
   if (failedChapters > 0) {
     console.log(`  Downloaded ${novel.chapters.length - failedChapters}/${novel.chapters.length} chapters (${failedChapters} failed).`);
+    console.log(`  Failed chapters: ${failedList.join(', ')}`);
   } else {
     console.log(`  All ${novel.chapters.length} chapters downloaded.`);
   }

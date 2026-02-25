@@ -5,7 +5,8 @@
   "description": "Scrape completed novels from freewebnovel.com and generate EPUB files",
   "scripts": {
     "start": "node src/index.js",
-    "sync": "node sync-library.js"
+    "sync": "node sync-library.js",
+    "automate": "node src/automate.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

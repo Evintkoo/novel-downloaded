@@ -43,6 +43,11 @@ export async function buildEpub(novelData, chapters, outputDir = 'output') {
     options.cover = coverPath;
   }
 
+  const emptyCount = chapters.filter(ch => !ch.content || ch.content.trim() === '').length;
+  if (emptyCount > 0) {
+    console.warn(`  Warning: ${emptyCount} chapter${emptyCount > 1 ? 's' : ''} with empty content.`);
+  }
+
   const epubChapters = chapters.map((ch) => {
     const chTitle = ch.title || 'Untitled Chapter';
     const body = ch.content || '<p>No content available.</p>';

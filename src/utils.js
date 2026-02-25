@@ -87,7 +87,12 @@ export function fetchWithBypassRaw(url) {
 
     req.on('error', fail);
     req.on('timeout', () => { req.destroy(); fail(new Error(`Timeout for ${url}`)); });
-    req.on('socket', (socket) => { if (!socket.listenerCount('error')) socket.on('error', fail); });
+    req.on('socket', (socket) => {
+      if (!socket._hasFailListener) {
+        socket._hasFailListener = true;
+        socket.on('error', (err) => { fail(err); });
+      }
+    });
     req.end();
   });
 }

@@ -1,0 +1,97 @@
+name: Crawl & Download Novels
+
+on:
+  # Run daily at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: 'Number of listing pages to crawl (~20 novels/page)'
+        required: false
+        default: '5'
+        type: string
+      workers:
+        description: 'Number of parallel worker threads'
+        required: false
+        default: '4'
+        type: string
+      max_chapters:
+        description: 'Skip novels with more than N chapters'
+        required: false
+        default: '2000'
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Restore cached EPUBs
+        uses: actions/cache/restore@v4
+        with:
+          path: output
+          key: novel-epubs-
+
+      - name: Run worker crawler
+        run: |
+          node src/worker-manager.js \
+            --pages ${{ inputs.pages || '5' }} \
+            --workers ${{ inputs.workers || '4' }} \
+            --max-chapters ${{ inputs.max_chapters || '2000' }} \
+            --delay 1500 \
+            --refresh
+
+      - name: Save EPUB cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: output
+          key: novel-epubs-${{ github.run_id }}
+
+      - name: Sync to library
+        run: node sync-library.js
+
+      - name: Commit and push library changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/epubs/
+          if git diff --cached --quiet; then
+            echo "No new novels to commit."
+          else
+            NOVEL_COUNT=$(git diff --cached --name-only | grep '\.epub$' | wc -l)
+            git commit -m "chore: sync ${NOVEL_COUNT} novel(s) to library [skip ci]"
+            git push
+          fi
+
+      - name: Upload EPUBs as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: novels-${{ github.run_number }}
+          path: output/*.epub
+          retention-days: 7
+          if-no-files-found: ignore

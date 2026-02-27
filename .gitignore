@@ -1,5 +1,5 @@
 node_modules/
-output/*.epub
+output/
 worker/
 proxy/
 .playwright-mcp/

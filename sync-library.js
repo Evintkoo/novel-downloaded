@@ -81,6 +81,13 @@ export async function syncLibrary(inputDir = DEFAULT_INPUT_DIR, outputDir = DEFA
 
   for (const file of files) {
     const srcPath = path.join(inputDir, file);
+
+    // Skip metadata extraction for files already tracked by slug
+    const guessedSlug = slugify(path.basename(file, '.epub'));
+    if (existingSlugs.has(guessedSlug)) {
+      continue;
+    }
+
     const meta = await extractMetadata(srcPath);
     if (!meta) {
       console.log(`  Skipping ${file} — could not read metadata`);

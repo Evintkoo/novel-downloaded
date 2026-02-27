@@ -20,6 +20,7 @@ process.on('uncaughtException', (err) => {
 
 const OUTPUT_DIR = 'output';
 const LIBRARY_DIR = 'docs/epubs';
+const NOVEL_LIST_CACHE = path.join(OUTPUT_DIR, 'novel-list.json');
 
 function parseCliArgs() {
   const { values } = parseArgs({
@@ -28,6 +29,7 @@ function parseCliArgs() {
       delay: { type: 'string', short: 'd' },
       concurrency: { type: 'string', short: 'c' },
       'max-chapters': { type: 'string', short: 'm' },
+      refresh: { type: 'boolean', short: 'r' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -38,8 +40,24 @@ function parseCliArgs() {
     delayMs: values.delay ? parseInt(values.delay, 10) : 1000,
     concurrency: values.concurrency ? parseInt(values.concurrency, 10) : 3,
     maxChapters: values['max-chapters'] ? parseInt(values['max-chapters'], 10) : 2000,
+    refresh: values.refresh || false,
     help: values.help || false,
   };
+}
+
+function loadCachedNovelList() {
+  try {
+    if (fs.existsSync(NOVEL_LIST_CACHE)) {
+      const data = JSON.parse(fs.readFileSync(NOVEL_LIST_CACHE, 'utf-8'));
+      if (Array.isArray(data) && data.length > 0) return data;
+    }
+  } catch {}
+  return null;
+}
+
+function saveCachedNovelList(novels) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  fs.writeFileSync(NOVEL_LIST_CACHE, JSON.stringify(novels, null, 2));
 }
 
 function epubExists(title) {
@@ -53,11 +71,6 @@ async function downloadNovel(slug, delayMs, concurrency, maxChapters) {
   if (!novel.title) {
     console.error(`  Could not find novel with slug: ${slug}`);
     return false;
-  }
-
-  if (epubExists(novel.title)) {
-    console.log(`  Skipping "${novel.title}" — EPUB already exists.`);
-    return true;
   }
 
   console.log(`  Title:    ${novel.title}`);
@@ -203,6 +216,7 @@ Options:
   --delay <ms>         Delay between requests in ms (default: 1000)
   --concurrency <N>    Parallel chapter downloads (default: 3)
   --max-chapters <N>   Skip novels with more than N chapters (default: 2000)
+  --refresh            Force re-crawl listing pages even if cached
   --help               Show this help message
 `);
     process.exit(0);
@@ -210,15 +224,26 @@ Options:
 
   console.log(`\n=== Automate Novel Library ===\n`);
 
-  // Step 1: Fetch novel listings
-  console.log(`Step 1: Fetching novel listings (${args.pages} page${args.pages > 1 ? 's' : ''})...\n`);
+  // Step 1: Get novel list (from cache or by crawling)
+  const cached = !args.refresh ? loadCachedNovelList() : null;
+  let allNovels;
 
-  const allNovels = [];
-  for (let p = 1; p <= args.pages; p++) {
-    console.log(`  Page ${p}/${args.pages}...`);
-    const novels = await fetchNovelList(p, args.delayMs);
-    allNovels.push(...novels);
-    if (p < args.pages) await delay(args.delayMs);
+  if (cached) {
+    console.log(`Step 1: Using cached novel list (${cached.length} novels). Use --refresh to re-crawl.\n`);
+    allNovels = cached;
+  } else {
+    console.log(`Step 1: Fetching novel listings (${args.pages} page${args.pages > 1 ? 's' : ''})...\n`);
+
+    allNovels = [];
+    for (let p = 1; p <= args.pages; p++) {
+      console.log(`  Page ${p}/${args.pages}...`);
+      const novels = await fetchNovelList(p, args.delayMs);
+      allNovels.push(...novels);
+      if (p < args.pages) await delay(args.delayMs);
+    }
+
+    saveCachedNovelList(allNovels);
+    console.log(`  Cached ${allNovels.length} novels to ${NOVEL_LIST_CACHE}`);
   }
 
   console.log(`\n  Found ${allNovels.length} novels.\n`);

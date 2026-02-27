@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "sync": "node sync-library.js",
-    "automate": "node src/automate.js"
+    "automate": "node src/automate.js",
+    "crawl": "node src/worker-manager.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

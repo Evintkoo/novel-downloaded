@@ -58,12 +58,29 @@ function parseCliArgs() {
     }
   }
 
+  const pages = values.pages ? parseInt(values.pages, 10) : null;
+  const delayMs = values.delay ? parseInt(values.delay, 10) : 1000;
+  const concurrency = values.concurrency ? parseInt(values.concurrency, 10) : 3;
+
+  if (pages !== null && (!Number.isFinite(pages) || pages < 1)) {
+    console.error('Error: --pages must be a positive integer');
+    process.exit(1);
+  }
+  if (!Number.isFinite(delayMs) || delayMs < 0) {
+    console.error('Error: --delay must be a non-negative integer');
+    process.exit(1);
+  }
+  if (!Number.isFinite(concurrency) || concurrency < 1) {
+    console.error('Error: --concurrency must be a positive integer');
+    process.exit(1);
+  }
+
   return {
-    pages: values.pages ? parseInt(values.pages, 10) : null,
+    pages,
     novel: novelSlug,
     all: values.all || false,
-    delayMs: values.delay ? parseInt(values.delay, 10) : 1000,
-    concurrency: values.concurrency ? parseInt(values.concurrency, 10) : 3,
+    delayMs,
+    concurrency,
     outputDir: values.output || 'output',
     help: values.help || false,
   };

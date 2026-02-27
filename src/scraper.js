@@ -96,12 +96,17 @@ export async function fetchChapterContent(url) {
   // Remove script tags and ads
   article.find('script, .ads, .ad, ins, .google-auto-placed').remove();
 
-  // Get content paragraphs
+  // Get content paragraphs (escape HTML entities to prevent injection)
   const paragraphs = [];
   article.find('p').each((_, p) => {
     const text = $(p).text().trim();
     if (text) {
-      paragraphs.push(`<p>${text}</p>`);
+      const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+      paragraphs.push(`<p>${escaped}</p>`);
     }
   });
 

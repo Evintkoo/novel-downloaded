@@ -71,7 +71,7 @@ async function downloadNovel(slug, delayMs, concurrency, maxChapters) {
 
   if (maxChapters && novel.chapters.length > maxChapters) {
     console.log(`  Skipping — ${novel.chapters.length} chapters exceeds limit of ${maxChapters}.`);
-    return 'skipped';
+    return false;
   }
 
   const bar = new cliProgress.SingleBar({
@@ -248,9 +248,7 @@ Options:
 
       await delay(args.delayMs);
       const result = await downloadNovel(novel.slug, args.delayMs, args.concurrency, args.maxChapters);
-      if (result === 'skipped') {
-        skipped++;
-      } else if (result) {
+      if (result) {
         succeeded++;
       } else {
         failed++;

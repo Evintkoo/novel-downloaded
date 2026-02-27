@@ -13,8 +13,9 @@ function slugify(title) {
 }
 
 async function extractMetadata(epubPath) {
-  const buf = fs.readFileSync(epubPath);
-  const zip = await JSZip.loadAsync(buf);
+  try {
+    const buf = fs.readFileSync(epubPath);
+    const zip = await JSZip.loadAsync(buf);
 
   // Find the OPF file
   let opfContent = null;
@@ -48,6 +49,10 @@ async function extractMetadata(epubPath) {
   );
 
   return { title, author, chapters: chapterFiles.length };
+  } catch (err) {
+    console.error(`  Failed to read metadata from ${epubPath}: ${err.message}`);
+    return null;
+  }
 }
 
 export async function syncLibrary(inputDir = DEFAULT_INPUT_DIR, outputDir = DEFAULT_OUTPUT_DIR) {

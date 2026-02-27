@@ -131,7 +131,12 @@ export function fetchBufferWithBypass(url) {
 
     req.on('error', fail);
     req.on('timeout', () => { req.destroy(); fail(new Error(`Timeout for ${url}`)); });
-    req.on('socket', (socket) => { socket.on('error', fail); });
+    req.on('socket', (socket) => {
+      if (!socket._hasFailListener) {
+        socket._hasFailListener = true;
+        socket.on('error', (err) => { fail(err); });
+      }
+    });
     req.end();
   });
 }
@@ -147,9 +152,13 @@ export async function retry(fn, retries = 5, delayMs = 3000) {
     } catch (err) {
       if (i === retries) throw err;
       const is429 = err.message.includes('429');
-      const backoff = is429
-        ? delayMs * Math.pow(2, i) // Exponential backoff for rate limits
-        : delayMs * (i + 1);
+      const MAX_BACKOFF = 30000;
+      const backoff = Math.min(
+        is429
+          ? delayMs * Math.pow(2, i) // Exponential backoff for rate limits
+          : delayMs * (i + 1),
+        MAX_BACKOFF
+      );
       if (is429 && i === 0) {
         // Only log once for 429s to reduce noise
         console.error(`  Rate limited, backing off...`);

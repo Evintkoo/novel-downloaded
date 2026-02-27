@@ -325,18 +325,27 @@
       const items = await dbAll();
       if (items.length === 0) { el.innerHTML = ''; return; }
       items.sort((a, b) => b.savedAt - a.savedAt);
-      el.innerHTML = '<h2>Downloaded</h2>' + items.map(item =>
-        `<div class="library-item">
+      el.innerHTML = '<h2>Downloaded</h2>' + items.map(item => {
+        const safeSlug = escapeHtml(item.slug);
+        return `<div class="library-item">
           <div class="info">
             <div class="title">${escapeHtml(item.title)}</div>
             <div class="meta">${escapeHtml(item.author)} · ${item.chapters} ch · ${formatSize(item.size)} · ${new Date(item.savedAt).toLocaleDateString()}</div>
           </div>
           <div class="actions">
-            <button class="btn-sm btn-dl" onclick="downloadSaved('${item.slug}')">Download</button>
-            <button class="btn-sm btn-del" onclick="removeSaved('${item.slug}')">Remove</button>
+            <button class="btn-sm btn-dl" data-slug="${safeSlug}" data-action="download">Download</button>
+            <button class="btn-sm btn-del" data-slug="${safeSlug}" data-action="remove">Remove</button>
           </div>
-        </div>`
-      ).join('');
+        </div>`;
+      }).join('');
+
+      // Attach event listeners safely
+      el.querySelectorAll('[data-action="download"]').forEach(btn => {
+        btn.addEventListener('click', () => downloadSaved(btn.dataset.slug));
+      });
+      el.querySelectorAll('[data-action="remove"]').forEach(btn => {
+        btn.addEventListener('click', () => removeSaved(btn.dataset.slug));
+      });
     }
 
     async function downloadSaved(slug) {
@@ -572,12 +581,13 @@ ${toc.join('\n')}
 
     function downloadBlob(blob, filename) {
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      a.href = url;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(a.href);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
 
     // Download a single chapter (no retries by default)
@@ -785,7 +795,9 @@ ${toc.join('\n')}
             epub,
           });
         }
-      } catch {}
+      } catch (err) {
+        console.warn('syncFromManifest failed:', err.message || err);
+      }
       renderLibrary();
     }
 

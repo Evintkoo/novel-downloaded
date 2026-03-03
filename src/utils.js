@@ -13,6 +13,13 @@ const RESPONSE_TIMEOUT = 60000; // 60s for full response body
 // hardcoded IP triggers Cloudflare 403. Only use bypass locally where
 // the domain may be DNS-blocked.
 const USE_DNS_BYPASS = !process.env.CI;
+const IS_CI = !!process.env.CI;
+
+// CORS proxies for CI fallback (same ones used by the web UI)
+const PROXIES = [
+  (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
+  (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+];
 
 function decompressStream(res) {
   const encoding = (res.headers['content-encoding'] || '').toLowerCase();
@@ -20,6 +27,50 @@ function decompressStream(res) {
   if (encoding === 'deflate') return res.pipe(zlib.createInflate());
   if (encoding === 'br') return res.pipe(zlib.createBrotliDecompress());
   return res;
+}
+
+// Fetch via proxy (for CI where direct access is Cloudflare-blocked)
+async function fetchViaProxy(url) {
+  for (const proxyFn of PROXIES) {
+    try {
+      const proxyUrl = proxyFn(url);
+      const isAllOrigins = proxyUrl.includes('allorigins');
+      const res = await new Promise((resolve, reject) => {
+        const parsed = new URL(proxyUrl);
+        const mod = parsed.protocol === 'https:' ? https : http;
+        const req = mod.request(proxyUrl, {
+          timeout: 20000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+          },
+        }, (res) => {
+          const stream = decompressStream(res);
+          const chunks = [];
+          stream.on('data', (chunk) => chunks.push(chunk));
+          stream.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') }));
+          stream.on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Proxy timeout')); });
+        req.end();
+      });
+
+      if (res.status < 200 || res.status >= 300) continue;
+
+      if (isAllOrigins) {
+        try {
+          const json = JSON.parse(res.body);
+          if (json.status?.http_code >= 400) continue;
+          const contents = json.contents;
+          if (contents && contents.length > 200) return contents;
+        } catch { continue; }
+      } else {
+        if (res.body && res.body.length > 200) return res.body;
+      }
+    } catch { continue; }
+  }
+  return null;
 }
 
 const customLookup = (hostname, options, callback) => {
@@ -39,7 +90,14 @@ const customLookup = (hostname, options, callback) => {
   }
 };
 
-export function fetchWithBypassRaw(url, _redirectCount = 0) {
+export async function fetchWithBypassRaw(url, _redirectCount = 0) {
+  // On CI, try proxy first since Cloudflare blocks datacenter IPs
+  if (IS_CI) {
+    const result = await fetchViaProxy(url);
+    if (result) return result;
+    // Fall through to direct attempt as last resort
+  }
+
   return new Promise((resolve, reject) => {
     if (_redirectCount > MAX_REDIRECTS) {
       reject(new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`));

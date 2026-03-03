@@ -342,5 +342,29 @@
     "author": "i_want_to_sleep",
     "chapters": 337,
     "size": 1377459
+  },
+  {
+    "slug": "fate-world",
+    "file": "fate-world.epub",
+    "title": "Fate/World",
+    "author": "Bleap",
+    "chapters": 156,
+    "size": 867270
+  },
+  {
+    "slug": "sss-grade-cafe-in-front-of-the-dungeon",
+    "file": "sss-grade-cafe-in-front-of-the-dungeon.epub",
+    "title": "SSS-Grade Cafe in Front of The Dungeon",
+    "author": "던전 앞 SSS급 카페",
+    "chapters": 213,
+    "size": 1212187
+  },
+  {
+    "slug": "the-mad-dog-of-the-duke-s-estate",
+    "file": "the-mad-dog-of-the-duke-s-estate.epub",
+    "title": "The Mad Dog of the Duke's Estate",
+    "author": "The Mad Dog of the Dukes House, 공작가에는 미친개가 산다",
+    "chapters": 401,
+    "size": 2729128
   }
 ]

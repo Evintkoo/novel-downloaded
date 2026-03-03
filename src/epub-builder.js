@@ -2,6 +2,7 @@ import { EPub } from 'epub-gen-memory';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { sanitizeFilename } from './utils.js';
 import { fetchCoverImage } from './scraper.js';
 
@@ -14,7 +15,8 @@ export async function buildEpub(novelData, chapters, outputDir = 'output') {
     console.log('  Downloading cover image...');
     const coverBuffer = await fetchCoverImage(coverUrl);
     if (coverBuffer) {
-      coverPath = path.join(os.tmpdir(), `novel-cover-${Date.now()}.jpg`);
+      const uid = crypto.randomUUID();
+      coverPath = path.join(os.tmpdir(), `novel-cover-${uid}.jpg`);
       fs.writeFileSync(coverPath, coverBuffer);
     }
   }

@@ -2,10 +2,11 @@ import https from 'node:https';
 import http from 'node:http';
 import dns from 'node:dns';
 import { URL } from 'node:url';
-import path from 'node:path';
 
 const TARGET_HOST = 'freewebnovel.com';
 const BYPASS_IP = '104.21.234.247';
+const MAX_REDIRECTS = 5;
+const RESPONSE_TIMEOUT = 60000; // 60s for full response body
 
 const customLookup = (hostname, options, callback) => {
   // Handle both (hostname, options, cb) and (hostname, cb) signatures
@@ -24,35 +25,13 @@ const customLookup = (hostname, options, callback) => {
   }
 };
 
-const httpsAgent = new https.Agent({ lookup: customLookup });
-const httpAgent = new http.Agent({ lookup: customLookup });
-
-export async function fetchWithBypass(url) {
-  const parsed = new URL(url);
-  const agent = parsed.protocol === 'https:' ? httpsAgent : httpAgent;
-
-  const res = await fetch(url, {
-    agent,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-    },
-    dispatcher: undefined,
-  });
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} for ${url}`);
-  }
-
-  return res.text();
-}
-
-// Node's built-in fetch doesn't support the `agent` option.
-// We use undici's custom dispatcher or fallback to node:https manually.
-// Let's implement a proper fetch using node:https for DNS bypass.
-export function fetchWithBypassRaw(url) {
+export function fetchWithBypassRaw(url, _redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (_redirectCount > MAX_REDIRECTS) {
+      reject(new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`));
+      return;
+    }
+
     const parsed = new URL(url);
     const mod = parsed.protocol === 'https:' ? https : http;
     let settled = false;
@@ -67,22 +46,33 @@ export function fetchWithBypassRaw(url) {
         'Accept-Language': 'en-US,en;q=0.5',
       },
     }, (res) => {
-      // Handle redirects
+      // Handle redirects — drain the response body first to free the socket
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume(); // drain body to release socket
         const redirectUrl = new URL(res.headers.location, url).href;
-        fetchWithBypassRaw(redirectUrl).then(resolve).catch(fail);
+        fetchWithBypassRaw(redirectUrl, _redirectCount + 1).then(resolve).catch(fail);
         return;
       }
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume(); // drain body to release socket
         fail(new Error(`HTTP ${res.statusCode} for ${url}`));
         return;
       }
 
+      // Set a timeout for receiving the full response body
+      const bodyTimer = setTimeout(() => {
+        req.destroy();
+        fail(new Error(`Response body timeout for ${url}`));
+      }, RESPONSE_TIMEOUT);
+
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks).toString('utf-8')); } });
-      res.on('error', fail);
+      res.on('end', () => {
+        clearTimeout(bodyTimer);
+        if (!settled) { settled = true; resolve(Buffer.concat(chunks).toString('utf-8')); }
+      });
+      res.on('error', (err) => { clearTimeout(bodyTimer); fail(err); });
     });
 
     req.on('error', fail);
@@ -97,8 +87,13 @@ export function fetchWithBypassRaw(url) {
   });
 }
 
-export function fetchBufferWithBypass(url) {
+export function fetchBufferWithBypass(url, _redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (_redirectCount > MAX_REDIRECTS) {
+      reject(new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`));
+      return;
+    }
+
     const parsed = new URL(url);
     const mod = parsed.protocol === 'https:' ? https : http;
     let settled = false;
@@ -112,21 +107,33 @@ export function fetchBufferWithBypass(url) {
         'Accept': '*/*',
       },
     }, (res) => {
+      // Handle redirects — drain the response body first to free the socket
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume(); // drain body to release socket
         const redirectUrl = new URL(res.headers.location, url).href;
-        fetchBufferWithBypass(redirectUrl).then(resolve).catch(fail);
+        fetchBufferWithBypass(redirectUrl, _redirectCount + 1).then(resolve).catch(fail);
         return;
       }
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume(); // drain body to release socket
         fail(new Error(`HTTP ${res.statusCode} for ${url}`));
         return;
       }
 
+      // Set a timeout for receiving the full response body
+      const bodyTimer = setTimeout(() => {
+        req.destroy();
+        fail(new Error(`Response body timeout for ${url}`));
+      }, RESPONSE_TIMEOUT);
+
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks)); } });
-      res.on('error', fail);
+      res.on('end', () => {
+        clearTimeout(bodyTimer);
+        if (!settled) { settled = true; resolve(Buffer.concat(chunks)); }
+      });
+      res.on('error', (err) => { clearTimeout(bodyTimer); fail(err); });
     });
 
     req.on('error', fail);

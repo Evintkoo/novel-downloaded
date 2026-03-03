@@ -96,22 +96,50 @@ export async function fetchChapterContent(url) {
   // Remove script tags and ads
   article.find('script, .ads, .ad, ins, .google-auto-placed').remove();
 
+  const escapeText = (text) => text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
   // Get content paragraphs (escape HTML entities to prevent injection)
   const paragraphs = [];
   article.find('p').each((_, p) => {
     const text = $(p).text().trim();
     if (text) {
-      const escaped = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-      paragraphs.push(`<p>${escaped}</p>`);
+      paragraphs.push(`<p>${escapeText(text)}</p>`);
     }
   });
 
+  // Fallback: if no <p> tags found, extract text from <br>-separated or raw text content
   if (paragraphs.length === 0) {
-    throw new Error(`No paragraphs found at ${url}`);
+    // Try splitting on <br> tags
+    const articleHtml = article.html() || '';
+    const lines = articleHtml.split(/<br\s*\/?>/i);
+    for (const line of lines) {
+      const text = cheerio.load(line).text().trim();
+      if (text) {
+        paragraphs.push(`<p>${escapeText(text)}</p>`);
+      }
+    }
+  }
+
+  // Final fallback: grab all text content from the article
+  if (paragraphs.length === 0) {
+    const rawText = article.text().trim();
+    if (rawText) {
+      const lines = rawText.split(/\n+/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          paragraphs.push(`<p>${escapeText(trimmed)}</p>`);
+        }
+      }
+    }
+  }
+
+  if (paragraphs.length === 0) {
+    throw new Error(`No content found at ${url}`);
   }
 
   const content = paragraphs.join('\n');

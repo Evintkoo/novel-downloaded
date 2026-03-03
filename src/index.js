@@ -275,7 +275,7 @@ async function downloadNovel(slug, delayMs, concurrency, outputDir) {
   }
 
   // Build EPUB
-  const outputPath = await buildEpub(
+  await buildEpub(
     {
       title: novel.title,
       author: novel.author,
@@ -287,7 +287,6 @@ async function downloadNovel(slug, delayMs, concurrency, outputDir) {
     outputDir
   );
 
-  console.log(`  Saved: ${outputPath}`);
   return true;
 }
 

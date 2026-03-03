@@ -3,7 +3,7 @@ import { fetchWithBypassRaw, fetchBufferWithBypass, delay, retry } from './utils
 
 const BASE_URL = 'https://freewebnovel.com';
 
-export async function fetchNovelList(page = 1, requestDelay = 1000) {
+export async function fetchNovelList(page = 1) {
   const url = page === 1
     ? `${BASE_URL}/sort/completed-novel`
     : `${BASE_URL}/sort/completed-novel/${page}`;

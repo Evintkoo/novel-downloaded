@@ -158,10 +158,7 @@ export async function fetchWithBypassRaw(url, _redirectCount = 0) {
     req.on('error', fail);
     req.on('timeout', () => { req.destroy(); fail(new Error(`Timeout for ${url}`)); });
     req.on('socket', (socket) => {
-      if (!socket._hasFailListener) {
-        socket._hasFailListener = true;
-        socket.on('error', (err) => { fail(err); });
-      }
+      socket.on('error', (err) => { fail(err); });
     });
     req.end();
   });
@@ -220,10 +217,7 @@ export function fetchBufferWithBypass(url, _redirectCount = 0) {
     req.on('error', fail);
     req.on('timeout', () => { req.destroy(); fail(new Error(`Timeout for ${url}`)); });
     req.on('socket', (socket) => {
-      if (!socket._hasFailListener) {
-        socket._hasFailListener = true;
-        socket.on('error', (err) => { fail(err); });
-      }
+      socket.on('error', (err) => { fail(err); });
     });
     req.end();
   });

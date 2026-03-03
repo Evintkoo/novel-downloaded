@@ -93,7 +93,7 @@ async function fetchListingPages(pages, delayMs) {
 
   for (let p = 1; p <= pages; p++) {
     console.log(`  Page ${p}/${pages}...`);
-    const novels = await fetchNovelList(p, delayMs);
+    const novels = await fetchNovelList(p);
     allNovels.push(...novels);
 
     if (p < pages) {

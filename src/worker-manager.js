@@ -166,6 +166,7 @@ class WorkerPool {
       const worker = this.idle.shift();
       const novel = this.queue.shift();
       this.stats.inProgress++;
+      worker._currentNovel = novel;
       worker.postMessage({ type: 'download', slug: novel.slug, title: novel.title });
     }
   }
@@ -180,6 +181,7 @@ class WorkerPool {
       );
     } else if (msg.type === 'result') {
       this.stats.inProgress--;
+      worker._currentNovel = null;
 
       if (msg.success) {
         this.stats.succeeded++;
@@ -202,7 +204,15 @@ class WorkerPool {
   _handleError(worker, err) {
     console.error(`\n  Worker ${worker._id} error: ${err.message}`);
     this.stats.inProgress--;
-    this.stats.failed++;
+
+    // Re-queue the lost novel if the worker had one in-flight
+    if (worker._currentNovel) {
+      console.log(`  Re-queuing "${worker._currentNovel.title}" after worker crash.`);
+      this.queue.unshift(worker._currentNovel);
+      worker._currentNovel = null;
+    } else {
+      this.stats.failed++;
+    }
 
     // Respawn worker
     const idx = this.workers.indexOf(worker);
@@ -276,7 +286,7 @@ async function main() {
     allNovels = [];
     for (let p = 1; p <= args.pages; p++) {
       process.stdout.write(`  Page ${p}/${args.pages}...`);
-      const novels = await fetchNovelList(p, args.delayMs);
+      const novels = await fetchNovelList(p);
       allNovels.push(...novels);
       console.log(` ${novels.length} novels`);
       if (p < args.pages) await delay(args.delayMs);

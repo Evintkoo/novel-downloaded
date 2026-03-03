@@ -17,38 +17,38 @@ async function extractMetadata(epubPath) {
     const buf = fs.readFileSync(epubPath);
     const zip = await JSZip.loadAsync(buf);
 
-  // Find the OPF file
-  let opfContent = null;
-  for (const name of Object.keys(zip.files)) {
-    if (name.endsWith('.opf')) {
-      opfContent = await zip.files[name].async('text');
-      break;
+    // Find the OPF file
+    let opfContent = null;
+    for (const name of Object.keys(zip.files)) {
+      if (name.endsWith('.opf')) {
+        opfContent = await zip.files[name].async('text');
+        break;
+      }
     }
-  }
 
-  if (!opfContent) return null;
+    if (!opfContent) return null;
 
-  function decodeXml(str) {
-    return str
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&apos;/g, "'");
-  }
+    function decodeXml(str) {
+      return str
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'");
+    }
 
-  const rawTitle = opfContent.match(/<dc:title>(.*?)<\/dc:title>/)?.[1] || path.basename(epubPath, '.epub');
-  const rawAuthor = opfContent.match(/<dc:creator[^>]*>(.*?)<\/dc:creator>/)?.[1] || 'Unknown Author';
-  const title = decodeXml(rawTitle);
-  const author = decodeXml(rawAuthor);
+    const rawTitle = opfContent.match(/<dc:title>(.*?)<\/dc:title>/)?.[1] || path.basename(epubPath, '.epub');
+    const rawAuthor = opfContent.match(/<dc:creator[^>]*>(.*?)<\/dc:creator>/)?.[1] || 'Unknown Author';
+    const title = decodeXml(rawTitle);
+    const author = decodeXml(rawAuthor);
 
-  // Count chapter files (xhtml files excluding toc/nav)
-  const chapterFiles = Object.keys(zip.files).filter(
-    n => n.endsWith('.xhtml') && !n.includes('toc') && !n.includes('nav')
-  );
+    // Count chapter files (xhtml files excluding toc/nav)
+    const chapterFiles = Object.keys(zip.files).filter(
+      n => n.endsWith('.xhtml') && !n.includes('toc') && !n.includes('nav')
+    );
 
-  return { title, author, chapters: chapterFiles.length };
+    return { title, author, chapters: chapterFiles.length };
   } catch (err) {
     console.error(`  Failed to read metadata from ${epubPath}: ${err.message}`);
     return null;

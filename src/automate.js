@@ -84,7 +84,7 @@ async function downloadNovel(slug, delayMs, concurrency, maxChapters) {
 
   if (maxChapters && novel.chapters.length > maxChapters) {
     console.log(`  Skipping — ${novel.chapters.length} chapters exceeds limit of ${maxChapters}.`);
-    return false;
+    return 'skipped';
   }
 
   const bar = new cliProgress.SingleBar({
@@ -237,7 +237,7 @@ Options:
     allNovels = [];
     for (let p = 1; p <= args.pages; p++) {
       console.log(`  Page ${p}/${args.pages}...`);
-      const novels = await fetchNovelList(p, args.delayMs);
+      const novels = await fetchNovelList(p);
       allNovels.push(...novels);
       if (p < args.pages) await delay(args.delayMs);
     }
@@ -273,7 +273,9 @@ Options:
 
       await delay(args.delayMs);
       const result = await downloadNovel(novel.slug, args.delayMs, args.concurrency, args.maxChapters);
-      if (result) {
+      if (result === 'skipped') {
+        skipped++;
+      } else if (result) {
         succeeded++;
       } else {
         failed++;

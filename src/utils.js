@@ -1,6 +1,7 @@
 import https from 'node:https';
 import http from 'node:http';
 import dns from 'node:dns';
+import zlib from 'node:zlib';
 import { URL } from 'node:url';
 
 const TARGET_HOST = 'freewebnovel.com';
@@ -8,13 +9,26 @@ const BYPASS_IP = '104.21.234.247';
 const MAX_REDIRECTS = 5;
 const RESPONSE_TIMEOUT = 60000; // 60s for full response body
 
+// On CI (GitHub Actions), skip DNS bypass — normal DNS works and the
+// hardcoded IP triggers Cloudflare 403. Only use bypass locally where
+// the domain may be DNS-blocked.
+const USE_DNS_BYPASS = !process.env.CI;
+
+function decompressStream(res) {
+  const encoding = (res.headers['content-encoding'] || '').toLowerCase();
+  if (encoding === 'gzip') return res.pipe(zlib.createGunzip());
+  if (encoding === 'deflate') return res.pipe(zlib.createInflate());
+  if (encoding === 'br') return res.pipe(zlib.createBrotliDecompress());
+  return res;
+}
+
 const customLookup = (hostname, options, callback) => {
   // Handle both (hostname, options, cb) and (hostname, cb) signatures
   if (typeof options === 'function') {
     callback = options;
     options = {};
   }
-  if (hostname === TARGET_HOST || hostname === `www.${TARGET_HOST}`) {
+  if (USE_DNS_BYPASS && (hostname === TARGET_HOST || hostname === `www.${TARGET_HOST}`)) {
     if (options.all) {
       callback(null, [{ address: BYPASS_IP, family: 4 }]);
     } else {
@@ -41,9 +55,16 @@ export function fetchWithBypassRaw(url, _redirectCount = 0) {
       lookup: customLookup,
       timeout: 30000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
       },
     }, (res) => {
       // Handle redirects — drain the response body first to free the socket
@@ -66,13 +87,14 @@ export function fetchWithBypassRaw(url, _redirectCount = 0) {
         fail(new Error(`Response body timeout for ${url}`));
       }, RESPONSE_TIMEOUT);
 
+      const stream = decompressStream(res);
       const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => {
         clearTimeout(bodyTimer);
         if (!settled) { settled = true; resolve(Buffer.concat(chunks).toString('utf-8')); }
       });
-      res.on('error', (err) => { clearTimeout(bodyTimer); fail(err); });
+      stream.on('error', (err) => { clearTimeout(bodyTimer); fail(err); });
     });
 
     req.on('error', fail);
@@ -103,7 +125,7 @@ export function fetchBufferWithBypass(url, _redirectCount = 0) {
       lookup: customLookup,
       timeout: 30000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept': '*/*',
       },
     }, (res) => {
@@ -127,13 +149,14 @@ export function fetchBufferWithBypass(url, _redirectCount = 0) {
         fail(new Error(`Response body timeout for ${url}`));
       }, RESPONSE_TIMEOUT);
 
+      const stream = decompressStream(res);
       const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => {
         clearTimeout(bodyTimer);
         if (!settled) { settled = true; resolve(Buffer.concat(chunks)); }
       });
-      res.on('error', (err) => { clearTimeout(bodyTimer); fail(err); });
+      stream.on('error', (err) => { clearTimeout(bodyTimer); fail(err); });
     });
 
     req.on('error', fail);
